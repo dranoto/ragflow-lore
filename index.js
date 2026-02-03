@@ -1,7 +1,7 @@
 // RAGFlow Lore Injector - Index.js
 // Aligned with StoryMode & SillyTavern Best Practices
 
-console.log("[RAGFlow] 1. Module parsing started..."); // Immediate visual confirmation
+console.log("[RAGFlow] 1. Module parsing started...");
 
 import { 
     extension_settings, 
@@ -200,6 +200,7 @@ function onSettingChange(event) {
 jQuery(async () => {
     try {
         console.log("[RAGFlow] 2. jQuery Initialization started...");
+        console.log("[RAGFlow] eventSource check:", eventSource ? "Exists" : "MISSING");
 
         // Inject Settings UI
         const settingsHtml = `
@@ -301,21 +302,24 @@ jQuery(async () => {
 
         // --- MAIN EVENT LOOP ---
 
-        // SAFE EVENT BINDING: Use string literals to prevent undefined crashes
-        // We listen to 'chat_input_handling' which fires when user submits text
-        const inputEvent = event_types && event_types.chat_input_handling ? event_types.chat_input_handling : 'chat_input_handling';
+        // PRIMARY TRIGGER: User Message Rendered
+        // This is safer than input_handling and is used by StoryMode
+        const renderEvent = event_types && event_types.USER_MESSAGE_RENDERED ? event_types.USER_MESSAGE_RENDERED : 'user_message_rendered';
         
-        eventSource.on(inputEvent, async (data) => {
-            log(`🔔 Event: chat_input_handling triggered.`);
+        eventSource.on(renderEvent, async (messageId) => {
+            log(`🔔 Event: USER_MESSAGE_RENDERED triggered.`);
             const settings = extension_settings[extensionName];
             if (!settings?.enabled) return;
 
-            const userQuery = data.text;
-            if (!userQuery || userQuery.trim().length < 2) {
-                updateInjectedPrompt(''); 
-                loreFetchPromise = null;
-                return;
-            }
+            // Get last user message from chat
+            // We can't rely on 'data' argument here as it might just be an ID
+            if (!chat || chat.length === 0) return;
+            
+            const lastMsg = chat[chat.length - 1];
+            if (!lastMsg || !lastMsg.is_user) return; // Only react to user messages
+
+            const userQuery = lastMsg.mes;
+            if (!userQuery || userQuery.trim().length < 2) return;
 
             log(`▶ Starting background fetch for: "${userQuery}"`);
             toastr.info("Fetching Lore...", "RAGFlow", { timeOut: 1500 });
@@ -327,7 +331,14 @@ jQuery(async () => {
             });
         });
 
-        // Regenerate/Swipe Handling
+        // DEBUG TRIGGER: Generation Started
+        // If this logs but the above doesn't, we know render event is missed
+        const genEvent = event_types && event_types.GENERATION_STARTED ? event_types.GENERATION_STARTED : 'generation_started';
+        eventSource.on(genEvent, () => {
+             log("🔔 Event: GENERATION_STARTED (Debug Check)");
+        });
+
+        // REGENERATE TRIGGER
         const onRegenerate = async () => {
             log(`🔔 Event: Regenerate/Swipe triggered.`);
             const settings = extension_settings[extensionName];
@@ -357,7 +368,7 @@ jQuery(async () => {
         const swipeEvent = event_types && event_types.MESSAGE_SWIPED ? event_types.MESSAGE_SWIPED : 'MESSAGE_SWIPED';
         eventSource.on(swipeEvent, onRegenerate);
 
-        // Reset on Chat Change
+        // RESET TRIGGER
         const changeEvent = event_types && event_types.CHAT_CHANGED ? event_types.CHAT_CHANGED : 'chat_id_changed';
         eventSource.on(changeEvent, () => {
             log(`🔔 Chat changed. Clearing context.`);
