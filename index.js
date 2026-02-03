@@ -1,4 +1,4 @@
-import { eventSource, event_types, saveSettingsDebounced, getContext } from '../../../../scripts/extensions.js';
+import { eventSource, event_types, saveSettingsDebounced, getContext } from '../../extensions.js';
 
 // 1. Default Settings
 const defaultSettings = {
@@ -62,7 +62,7 @@ async function fetchRagflowContext(query) {
 eventSource.on(event_types.chat_input_handling, async (data) => {
     const context = getContext();
     const settings = context.extension_settings[extensionName];
-    if (!settings.enabled) return;
+    if (!settings?.enabled) return;
     
     pendingLore = "";
     const userQuery = data.text;
@@ -140,11 +140,6 @@ jQuery(async () => {
         init: () => {
             console.log("[RAGFlow] Extension Loaded.");
         },
-        settings: buildSettingsMenu // This links the UI to the extension settings
+        settings: buildSettingsMenu 
     });
-
-    // Support for older ST versions or explicit manual registration
-    if (context.registerExtensionSettings) {
-        context.registerExtensionSettings(extensionName, buildSettingsMenu);
-    }
 });
