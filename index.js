@@ -36,6 +36,7 @@ const defaultSettings = {
 
 // Global State
 let loreFetchPromise = null;
+let lastFetchedQuery = ""; // Deduplication check
 
 // Helper: Timestamped Logger
 function log(msg, ...args) {
@@ -200,7 +201,6 @@ function onSettingChange(event) {
 jQuery(async () => {
     try {
         console.log("[RAGFlow] 2. jQuery Initialization started...");
-        console.log("[RAGFlow] eventSource check:", eventSource ? "Exists" : "MISSING");
 
         // Inject Settings UI
         const settingsHtml = `
@@ -300,80 +300,83 @@ jQuery(async () => {
         // Load Settings
         loadSettings();
 
-        // --- MAIN EVENT LOOP ---
+        // --- MAIN LOGIC ---
 
-        // PRIMARY TRIGGER: User Message Rendered
-        // This is safer than input_handling and is used by StoryMode
-        const renderEvent = event_types && event_types.USER_MESSAGE_RENDERED ? event_types.USER_MESSAGE_RENDERED : 'user_message_rendered';
-        
-        eventSource.on(renderEvent, async (messageId) => {
-            log(`🔔 Event: USER_MESSAGE_RENDERED triggered.`);
+        /**
+         * Unified Trigger Handler
+         * Attempts to get the latest query from the event OR the chat history.
+         */
+        const handleTrigger = async (eventName, eventData) => {
             const settings = extension_settings[extensionName];
             if (!settings?.enabled) return;
 
-            // Get last user message from chat
-            // We can't rely on 'data' argument here as it might just be an ID
-            if (!chat || chat.length === 0) return;
-            
-            const lastMsg = chat[chat.length - 1];
-            if (!lastMsg || !lastMsg.is_user) return; // Only react to user messages
+            // 1. Determine Query
+            let userQuery = "";
 
-            const userQuery = lastMsg.mes;
+            if (eventName === 'chat_input_handling' && eventData && eventData.text) {
+                userQuery = eventData.text;
+            } 
+            else {
+                // For all other events, look at the last user message in the chat history
+                if (!chat || chat.length === 0) return;
+                
+                // Find last user message
+                let lastUserMes = null;
+                for (let i = chat.length - 1; i >= 0; i--) {
+                    if (!chat[i].is_system && chat[i].is_user) {
+                        lastUserMes = chat[i].mes;
+                        break;
+                    }
+                }
+                userQuery = lastUserMes;
+            }
+
             if (!userQuery || userQuery.trim().length < 2) return;
 
-            log(`▶ Starting background fetch for: "${userQuery}"`);
-            toastr.info("Fetching Lore...", "RAGFlow", { timeOut: 1500 });
+            // 2. Dedup Check
+            // If we already fetched this query recently, don't fetch again.
+            if (userQuery === lastFetchedQuery) {
+                // log(`⏭️ Skipping duplicate fetch for: "${userQuery.substring(0, 20)}..."`);
+                return;
+            }
+
+            // 3. Execute Fetch
+            log(`▶ Triggered by '${eventName}'. Fetching: "${userQuery.substring(0, 30)}..."`);
+            toastr.info("Fetching Lore...", "RAGFlow", { timeOut: 1000 });
             
+            lastFetchedQuery = userQuery;
             loreFetchPromise = fetchRagflowContext(userQuery).then(result => {
                 log(`🏁 Fetch complete.`);
                 updateInjectedPrompt(result);
                 return result;
             });
-        });
-
-        // DEBUG TRIGGER: Generation Started
-        // If this logs but the above doesn't, we know render event is missed
-        const genEvent = event_types && event_types.GENERATION_STARTED ? event_types.GENERATION_STARTED : 'generation_started';
-        eventSource.on(genEvent, () => {
-             log("🔔 Event: GENERATION_STARTED (Debug Check)");
-        });
-
-        // REGENERATE TRIGGER
-        const onRegenerate = async () => {
-            log(`🔔 Event: Regenerate/Swipe triggered.`);
-            const settings = extension_settings[extensionName];
-            if (!settings?.enabled) return;
-
-            if (!chat || chat.length === 0) return;
-            
-            // Find last user message
-            let lastUserMes = null;
-            for (let i = chat.length - 1; i >= 0; i--) {
-                if (!chat[i].is_system && chat[i].is_user) {
-                    lastUserMes = chat[i].mes;
-                    break;
-                }
-            }
-
-            if (lastUserMes) {
-                log(`▶ Refetching for: "${lastUserMes}"`);
-                toastr.info("Refetching Lore...", "RAGFlow", { timeOut: 1500 });
-                loreFetchPromise = fetchRagflowContext(lastUserMes).then(result => {
-                    updateInjectedPrompt(result);
-                    return result;
-                });
-            }
         };
 
-        const swipeEvent = event_types && event_types.MESSAGE_SWIPED ? event_types.MESSAGE_SWIPED : 'MESSAGE_SWIPED';
-        eventSource.on(swipeEvent, onRegenerate);
+        // --- BIND TRIGGERS ---
 
-        // RESET TRIGGER
-        const changeEvent = event_types && event_types.CHAT_CHANGED ? event_types.CHAT_CHANGED : 'chat_id_changed';
-        eventSource.on(changeEvent, () => {
+        // 1. Chat Input (Typing enter)
+        // Note: Using string literal to avoid undefined errors if event_types is missing key
+        eventSource.on('chat_input_handling', (data) => handleTrigger('chat_input_handling', data));
+
+        // 2. User Message Rendered (Message appears in DOM)
+        eventSource.on('user_message_rendered', (id) => handleTrigger('user_message_rendered', null));
+        
+        // 3. Generation Started (Last resort, fires right before sending to LLM)
+        eventSource.on('generation_started', () => handleTrigger('generation_started', null));
+
+        // 4. Swipe / Regenerate
+        eventSource.on('MESSAGE_SWIPED', () => {
+             // On swipe, clear lastFetchedQuery so we force a re-check of the previous message
+             lastFetchedQuery = ""; 
+             handleTrigger('MESSAGE_SWIPED', null);
+        });
+
+        // 5. Reset on Chat Change
+        eventSource.on('chat_id_changed', () => {
             log(`🔔 Chat changed. Clearing context.`);
             updateInjectedPrompt('');
             loreFetchPromise = null;
+            lastFetchedQuery = "";
         });
 
         console.log("[RAGFlow] 3. Lore Injector Aligned & Loaded Successfully.");
