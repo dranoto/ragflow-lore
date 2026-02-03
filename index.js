@@ -125,26 +125,24 @@ function buildSettingsMenu() {
 }
 
 // 5. Registration
-jQuery(async () => {
-    const context = getContext();
+const context = getContext();
 
-    // Ensure settings object is initialized
-    if (!context.extension_settings[extensionName]) {
-        context.extension_settings[extensionName] = { ...defaultSettings };
-    }
+// Ensure settings object is initialized
+if (!context.extension_settings[extensionName]) {
+    context.extension_settings[extensionName] = { ...defaultSettings };
+}
 
-    // Standard Registration
-    context.registerExtension({
-        name: "RAGFlow Lore Injector",
-        id: extensionName,
-        init: () => {
-            console.log("[RAGFlow] Extension Loaded.");
-        },
-        settings: buildSettingsMenu 
-    });
-
-    // Explicitly register settings to force the gear icon to appear
-    if (context.registerExtensionSettings) {
-        context.registerExtensionSettings(extensionName, buildSettingsMenu);
-    }
+// Standard Registration
+context.registerExtension({
+    name: "RAGFlow Lore Injector",
+    id: extensionName,
+    init: () => {
+        console.log("[RAGFlow] Extension Loaded.");
+    },
+    settings: buildSettingsMenu 
 });
+
+// Explicitly register settings to force the gear icon to appear
+if (context.registerExtensionSettings) {
+    context.registerExtensionSettings(extensionName, buildSettingsMenu);
+}
