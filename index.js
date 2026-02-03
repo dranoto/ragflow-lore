@@ -1,5 +1,5 @@
 // RAGFlow Lore Injector - Index.js
-// Rewritten to match the SillyTavern "Classic" Extension pattern
+// Aligned strictly with the st-extension-example pattern
 
 import { 
     extension_settings, 
@@ -9,12 +9,12 @@ import {
     event_types 
 } from "../../../extensions.js";
 
-// Import saveSettingsDebounced from the main script (adjust path if needed based on your folder depth)
-// The example repo uses ../../../../script.js, assuming: scripts/extensions/third-party/your-extension/
+// NOTE: The example assumes 'scripts/extensions/third-party/extension-name' (Depth 4).
+// If you are in 'scripts/extensions/ragflow-lore' (Depth 3), this import might need to be '../../script.js'.
+// We will stick to the example's depth.
 import { saveSettingsDebounced } from "../../../../script.js";
 
 const extensionName = "ragflow-lore";
-const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 
 // 1. Default Settings
 const defaultSettings = {
@@ -28,17 +28,15 @@ const defaultSettings = {
     injectSuffix: '\n]\n'
 };
 
-// Global state for the current generation cycle
+// Global state
 let pendingLore = "";
 
-// 2. Core Logic
-
+// 2. Core Logic (RAGFlow Interaction)
 async function fetchRagflowContext(query) {
     const settings = extension_settings[extensionName];
     
     if (!settings.apiKey || !settings.datasetId) return null;
 
-    // Ensure URL doesn't end with slash
     const cleanUrl = settings.baseUrl.replace(/\/$/, '');
     const url = `${cleanUrl}/api/v1/datasets/${settings.datasetId}/search`;
     
@@ -60,7 +58,6 @@ async function fetchRagflowContext(query) {
         const data = await response.json();
         
         let chunks = [];
-        // Handle different RAGFlow response structures
         if (data.data && Array.isArray(data.data.rows)) {
             chunks = data.data.rows.map(row => row.content_with_weight || row.content);
         } else if (Array.isArray(data.chunks)) {
@@ -73,61 +70,25 @@ async function fetchRagflowContext(query) {
         return chunks.join('\n...\n');
     } catch (error) {
         console.error('[RAGFlow] Search failed:', error);
-        toastr.error('RAGFlow search failed. Check console for details.');
+        toastr.error('RAGFlow search failed. Check console.');
         return null;
     }
 }
 
-function setupEventListeners() {
-    // Listener 1: Capture input and fetch context
-    eventSource.on(event_types.chat_input_handling, async (data) => {
-        const settings = extension_settings[extensionName];
-        if (!settings?.enabled) return;
-        
-        pendingLore = "";
-        const userQuery = data.text;
-        
-        // Skip short queries
-        if (!userQuery || userQuery.trim().length < 5) return;
-
-        console.log('[RAGFlow] Fetching context for:', userQuery);
-        const result = await fetchRagflowContext(userQuery);
-        
-        if (result) {
-            pendingLore = `${settings.injectPrefix}${result}${settings.injectSuffix}`;
-            console.log('[RAGFlow] Context ready for injection.');
-        }
-    });
-
-    // Listener 2: Inject into System Prompt immediately before generation
-    eventSource.on(event_types.chat_completion_prompt_ready, (data) => {
-        if (pendingLore) {
-            if (data.system_prompt !== undefined) {
-                // Append to system prompt
-                data.system_prompt += pendingLore;
-                console.log("[RAGFlow] Injected into System Prompt.");
-            } else {
-               console.log("[RAGFlow] Could not find system_prompt to inject.");
-            }
-        }
-    });
-}
-
-// 3. Settings & UI Management
-
+// 3. Settings Management (Matches Example Logic)
 async function loadSettings() {
-    // Initialize default settings if they don't exist
+    // Ensure the settings object exists
     extension_settings[extensionName] = extension_settings[extensionName] || {};
+    
+    // Assign defaults if keys are missing
     const settings = extension_settings[extensionName];
-
-    // Merge defaults to ensure all keys exist
     for (const key in defaultSettings) {
         if (!settings.hasOwnProperty(key)) {
             settings[key] = defaultSettings[key];
         }
     }
 
-    // Update UI elements with current settings values
+    // Update UI elements to match settings
     $("#ragflow_enabled").prop("checked", settings.enabled);
     $("#ragflow_baseUrl").val(settings.baseUrl);
     $("#ragflow_apiKey").val(settings.apiKey);
@@ -136,11 +97,11 @@ async function loadSettings() {
     $("#ragflow_similarity").val(settings.similarityThreshold);
 }
 
-// Generic handler for input changes
 function onSettingChange(event) {
     const id = event.target.id;
     const settings = extension_settings[extensionName];
     
+    // Update settings object based on input ID
     switch (id) {
         case "ragflow_enabled":
             settings.enabled = !!$(event.target).prop("checked");
@@ -165,11 +126,9 @@ function onSettingChange(event) {
     saveSettingsDebounced();
 }
 
-// 4. Main Initialization (jQuery Ready)
-
+// 4. Initialization (The Standard Way)
 jQuery(async () => {
-    // Define HTML template inline (or load from file if preferred)
-    // We use the "inline-drawer" class structure to match ST's native look
+    // Inline HTML Template (Replacing the $.get call from the example)
     const settingsHtml = `
     <div class="ragflow-extension-settings">
         <div class="inline-drawer">
@@ -184,44 +143,35 @@ jQuery(async () => {
                         Enable RAGFlow Lore
                     </label>
                 </div>
-                
                 <div class="flex-container">
                     <label>Base URL</label>
-                    <input type="text" class="text_pole" id="ragflow_baseUrl" placeholder="http://localhost:9380" />
+                    <input type="text" class="text_pole" id="ragflow_baseUrl" />
                 </div>
-                
                 <div class="flex-container">
                     <label>API Key</label>
-                    <input type="password" class="text_pole" id="ragflow_apiKey" placeholder="ragflow-..." />
+                    <input type="password" class="text_pole" id="ragflow_apiKey" />
                 </div>
-
                 <div class="flex-container">
                     <label>Dataset ID</label>
                     <input type="text" class="text_pole" id="ragflow_datasetId" />
                 </div>
-
                 <div class="flex-container">
                     <label>Max Chunks</label>
                     <input type="number" class="text_pole" id="ragflow_maxChunks" min="1" max="10" />
                 </div>
-
                 <div class="flex-container">
-                    <label>Similarity Threshold</label>
-                    <input type="number" class="text_pole" id="ragflow_similarity" step="0.1" min="0" max="1" />
-                </div>
-                
-                <div class="flex-container">
-                    <small><i>Status: See browser console (F12) for injection logs.</i></small>
+                    <label>Similarity</label>
+                    <input type="number" class="text_pole" id="ragflow_similarity" step="0.1" />
                 </div>
             </div>
         </div>
     </div>
     `;
 
-    // Append to the extension settings menu
+    // Append to the settings menu (Standard ST Location)
     $("#extensions_settings").append(settingsHtml);
 
-    // Bind event listeners to the inputs we just created
+    // Bind Listeners
     $("#ragflow_enabled").on("change", onSettingChange);
     $("#ragflow_baseUrl").on("input", onSettingChange);
     $("#ragflow_apiKey").on("input", onSettingChange);
@@ -229,11 +179,32 @@ jQuery(async () => {
     $("#ragflow_maxChunks").on("input", onSettingChange);
     $("#ragflow_similarity").on("input", onSettingChange);
 
-    // Initial loading of settings
+    // Initial Load
     loadSettings();
 
-    // Start extension listeners
-    setupEventListeners();
-    
-    console.log("[RAGFlow] Extension initialized.");
+    // Setup Logic Listeners
+    eventSource.on(event_types.chat_input_handling, async (data) => {
+        const settings = extension_settings[extensionName];
+        if (!settings?.enabled) return;
+        
+        pendingLore = "";
+        const userQuery = data.text;
+        if (!userQuery || userQuery.trim().length < 5) return;
+
+        console.log('[RAGFlow] Fetching...', userQuery);
+        const result = await fetchRagflowContext(userQuery);
+        if (result) {
+            pendingLore = `${settings.injectPrefix}${result}${settings.injectSuffix}`;
+            console.log('[RAGFlow] Context ready.');
+        }
+    });
+
+    eventSource.on(event_types.chat_completion_prompt_ready, (data) => {
+        if (pendingLore && data.system_prompt !== undefined) {
+            data.system_prompt += pendingLore;
+            console.log("[RAGFlow] Injected.");
+        }
+    });
+
+    console.log("[RAGFlow] Loaded successfully.");
 });
