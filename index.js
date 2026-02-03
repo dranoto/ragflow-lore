@@ -14,7 +14,8 @@ import {
     setExtensionPrompt,
     extension_prompt_types,
     extension_prompt_roles,
-    chat // Import chat directly to access history if needed
+    chat, // Import chat directly to access history if needed
+    addWandItem // Import the Wand Menu helper
 } from '/script.js';
 
 const extensionName = "ragflow-lore";
@@ -318,7 +319,7 @@ jQuery(async () => {
         loadSettings();
 
         // ---------------------------------------------------------------------
-        // FEATURE: Manual Trigger via Button
+        // FEATURE: Manual Trigger via Wand Menu (Story Mode style)
         // ---------------------------------------------------------------------
 
         const performManualFetch = async (sourceQuery) => {
@@ -338,43 +339,20 @@ jQuery(async () => {
             }
         };
 
-        // 2. Inject Manual Button into Chat Bar
-        // We try multiple selectors to find where to put the button
-        const btnId = "ragflow_input_btn";
-        if ($(`#${btnId}`).length === 0) {
-            const btnHtml = `
-                <div id="${btnId}" class="mes_text_button fa-solid fa-book-journal-whills" 
-                     title="Grab RAG Lore (Fetch & Inject)" 
-                     style="margin-right: 10px; cursor: pointer; opacity: 0.7; display: flex; align-items: center;">
-                </div>
-            `;
-            
-            // Try standard location first
-            let container = $("#chat_input_buttons");
-            
-            // Fallback for different themes/versions
-            if (container.length === 0) container = $("#form_chat_buttons");
-            if (container.length === 0) container = $(".chat_input_buttons");
-
-            if (container.length > 0) {
-                container.prepend(btnHtml);
-                
-                $(`#${btnId}`).on("click", async (e) => {
-                    e.preventDefault();
-                    // Add visual feedback
-                    const btn = $(`#${btnId}`);
-                    btn.css("opacity", "1.0").addClass("fa-spin");
-                    
+        // Inject into Wand Menu
+        if (typeof addWandItem === 'function') {
+            addWandItem({
+                id: 'ragflow_fetch',
+                icon: 'fa-solid fa-book-journal-whills',
+                title: 'Grab RAG Lore',
+                callback: async () => {
                     const query = $("#send_textarea").val();
                     await performManualFetch(query);
-                    
-                    btn.css("opacity", "0.7").removeClass("fa-spin");
-                });
-                
-                log("✅ Added Manual 'Grab RAG Lore' button to chat bar.");
-            } else {
-                log("⚠️ Could not find chat input buttons container. Manual button not added.");
-            }
+                }
+            });
+            log("✅ Added 'Grab RAG Lore' to Wand Menu.");
+        } else {
+            console.warn("[RAGFlow] addWandItem not found. Is your ST version up to date?");
         }
 
         // Reset prompt on chat change
