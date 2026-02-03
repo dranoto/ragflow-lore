@@ -1,38 +1,25 @@
-// DIAGNOSTIC: Check what's available in the global scope
+// Import necessary functions from SillyTavern extensions.js
+// Based on the working extension pattern provided
+import { 
+    getContext, 
+    loadExtensionSettings, 
+    extension_settings, 
+    renderExtensionTemplateAsync,
+    registerExtension,
+    eventSource, 
+    event_types, 
+    saveSettingsDebounced 
+} from '../../../extensions.js';
+
 console.log('[RAGFlow-DEBUG] Starting extension load...');
-console.log('[RAGFlow-DEBUG] typeof eventSource:', typeof eventSource);
+console.log('[RAGFlow-DEBUG] Imports loaded successfully');
 console.log('[RAGFlow-DEBUG] typeof getContext:', typeof getContext);
-console.log('[RAGFlow-DEBUG] typeof require:', typeof require);
-
-// Try to get dependencies - handle both ES6 imports and CommonJS/global approaches
-let eventSource, event_types, saveSettingsDebounced, getContext;
-
-try {
-    // Try ES6 import first (may fail in older SillyTavern versions)
-    const extensionsModule = require('../../extensions.js');
-    eventSource = extensionsModule.eventSource;
-    event_types = extensionsModule.event_types;
-    saveSettingsDebounced = extensionsModule.saveSettingsDebounced;
-    getContext = extensionsModule.getContext;
-    console.log('[RAGFlow-DEBUG] Loaded via CommonJS require()');
-} catch (e) {
-    console.error('[RAGFlow-DEBUG] CommonJS require() failed:', e);
-    // Fall back to globals
-    console.log('[RAGFlow-DEBUG] Trying global variables...');
-    eventSource = window.eventSource;
-    event_types = window.event_types;
-    saveSettingsDebounced = window.saveSettingsDebounced;
-    getContext = window.getContext;
-}
-
-// Validate we have the required dependencies
-if (typeof getContext !== 'function') {
-    console.error('[RAGFlow-DEBUG] CRITICAL: getContext is not a function! Extension cannot load.');
-    console.error('[RAGFlow-DEBUG] Available globals:', Object.keys(window).filter(k => k.includes('event') || k.includes('context') || k.includes('extension')));
-    throw new Error('getContext function not available');
-}
-
-console.log('[RAGFlow-DEBUG] Dependencies loaded successfully');
+console.log('[RAGFlow-DEBUG] typeof eventSource:', typeof eventSource);
+console.log('[RAGFlow-DEBUG] typeof event_types:', typeof event_types);
+console.log('[RAGFlow-DEBUG] typeof saveSettingsDebounced:', typeof saveSettingsDebounced);
+console.log('[RAGFlow-DEBUG] typeof extension_settings:', typeof extension_settings);
+console.log('[RAGFlow-DEBUG] typeof renderExtensionTemplateAsync:', typeof renderExtensionTemplateAsync);
+console.log('[RAGFlow-DEBUG] typeof registerExtension:', typeof registerExtension);
 
 // 1. Default Settings
 const defaultSettings = {
@@ -51,8 +38,7 @@ let pendingLore = "";
 
 // 2. RAGFlow API Interaction
 async function fetchRagflowContext(query) {
-    const context = getContext();
-    const settings = context.extension_settings[extensionName];
+    const settings = extension_settings[extensionName];
     
     if (!settings.apiKey || !settings.datasetId) return null;
 
@@ -95,8 +81,7 @@ async function fetchRagflowContext(query) {
 // 3. Event Listeners
 function setupEventListeners() {
     eventSource.on(event_types.chat_input_handling, async (data) => {
-        const context = getContext();
-        const settings = context.extension_settings[extensionName];
+        const settings = extension_settings[extensionName];
         if (!settings?.enabled) return;
         
         pendingLore = "";
@@ -124,8 +109,7 @@ function setupEventListeners() {
 
 // 4. Build Settings UI
 function buildSettingsMenu() {
-    const context = getContext();
-    const settings = context.extension_settings[extensionName] || { ...defaultSettings };
+    const settings = extension_settings[extensionName] || { ...defaultSettings };
     const container = document.createElement('div');
     container.className = 'ragflow-settings-container';
 
@@ -148,12 +132,12 @@ function buildSettingsMenu() {
     const inputs = container.querySelectorAll('input');
     inputs.forEach(input => {
         input.addEventListener('change', () => {
-            settings.enabled = container.querySelector('#ragflow_enabled').checked;
-            settings.baseUrl = container.querySelector('#ragflow_baseUrl').value;
-            settings.apiKey = container.querySelector('#ragflow_apiKey').value;
-            settings.datasetId = container.querySelector('#ragflow_datasetId').value;
-            settings.maxChunks = parseInt(container.querySelector('#ragflow_maxChunks').value);
-            settings.similarityThreshold = parseFloat(container.querySelector('#ragflow_similarity').value);
+            extension_settings[extensionName].enabled = container.querySelector('#ragflow_enabled').checked;
+            extension_settings[extensionName].baseUrl = container.querySelector('#ragflow_baseUrl').value;
+            extension_settings[extensionName].apiKey = container.querySelector('#ragflow_apiKey').value;
+            extension_settings[extensionName].datasetId = container.querySelector('#ragflow_datasetId').value;
+            extension_settings[extensionName].maxChunks = parseInt(container.querySelector('#ragflow_maxChunks').value);
+            extension_settings[extensionName].similarityThreshold = parseFloat(container.querySelector('#ragflow_similarity').value);
             saveSettingsDebounced();
         });
     });
@@ -162,38 +146,18 @@ function buildSettingsMenu() {
 
 // 5. Registration
 (function registerExtension() {
-    console.log('[RAGFlow-DEBUG] Starting registration IIFE...');
+    console.log('[RAGFlow-DEBUG] Starting registration...');
 
     try {
-        const context = getContext();
-        console.log('[RAGFlow-DEBUG] Got context:', context);
-        console.log('[RAGFlow-DEBUG] typeof context:', typeof context);
-        console.log('[RAGFlow-DEBUG] context keys:', context ? Object.keys(context) : 'null');
-
-        // Ensure settings object is initialized
-        console.log('[RAGFlow-DEBUG] Checking extension_settings...');
-        if (!context.extension_settings) {
-            console.error('[RAGFlow-DEBUG] CRITICAL: context.extension_settings is undefined!');
-            throw new Error('context.extension_settings not available');
+        // Initialize settings if they don't exist
+        if (!extension_settings[extensionName]) {
+            extension_settings[extensionName] = { ...defaultSettings };
+            console.log('[RAGFlow-DEBUG] Settings initialized');
         }
 
-        if (!context.extension_settings[extensionName]) {
-            console.log('[RAGFlow-DEBUG] Initializing settings...');
-            context.extension_settings[extensionName] = { ...defaultSettings };
-        }
-
-        // Check registration method
-        console.log('[RAGFlow-DEBUG] typeof context.registerExtension:', typeof context.registerExtension);
-
-        if (typeof context.registerExtension !== 'function') {
-            console.error('[RAGFlow-DEBUG] CRITICAL: context.registerExtension is not a function!');
-            console.error('[RAGFlow-DEBUG] Available methods:', Object.keys(context).filter(k => typeof context[k] === 'function'));
-            throw new Error('registerExtension method not available');
-        }
-
-        // Standard Registration
-        console.log('[RAGFlow-DEBUG] Calling registerExtension...');
-        context.registerExtension({
+        // Register the extension with SillyTavern
+        console.log('[RAGFlow-DEBUG] Registering extension...');
+        registerExtension({
             name: "RAGFlow Lore Injector",
             id: extensionName,
             init: () => {
@@ -202,23 +166,11 @@ function buildSettingsMenu() {
             },
             settings: buildSettingsMenu
         });
-        console.log('[RAGFlow-DEBUG] registerExtension completed');
-
-        // Explicitly register settings to force the gear icon to appear
-        console.log('[RAGFlow-DEBUG] typeof context.registerExtensionSettings:', typeof context.registerExtensionSettings);
-        if (context.registerExtensionSettings) {
-            console.log('[RAGFlow-DEBUG] Calling registerExtensionSettings...');
-            context.registerExtensionSettings(extensionName, buildSettingsMenu);
-            console.log('[RAGFlow-DEBUG] registerExtensionSettings completed');
-        }
-
+        
         console.log('[RAGFlow-DEBUG] Registration completed successfully!');
     } catch (error) {
         console.error('[RAGFlow-DEBUG] ERROR during registration:', error);
         console.error('[RAGFlow-DEBUG] Error stack:', error.stack);
-        console.error('[RAGFlow-DEBUG] Error name:', error.name);
-        console.error('[RAGFlow-DEBUG] Error message:', error.message);
-        // Re-throw to let SillyTavern catch it
         throw error;
     }
 })();
