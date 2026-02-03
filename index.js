@@ -4,15 +4,17 @@
 import { 
     extension_settings, 
     getContext, 
-    loadExtensionSettings, 
-    eventSource, 
-    event_types 
+    loadExtensionSettings
 } from "../../../extensions.js";
 
 // NOTE: The example assumes 'scripts/extensions/third-party/extension-name' (Depth 4).
 // If you are in 'scripts/extensions/ragflow-lore' (Depth 3), this import might need to be '../../script.js'.
 // We will stick to the example's depth.
-import { saveSettingsDebounced } from "../../../../script.js";
+import { 
+    saveSettingsDebounced,
+    eventSource,
+    event_types
+} from "../../../../script.js";
 
 const extensionName = "ragflow-lore";
 
