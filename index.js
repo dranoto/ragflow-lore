@@ -1,27 +1,29 @@
 // RAGFlow Lore Injector - Index.js
-// Aligned strictly with the st-extension-example pattern
+// Aligned with StoryMode & SillyTavern Best Practices
 
 import { 
     extension_settings, 
-    getContext, 
-    loadExtensionSettings
-} from "../../../extensions.js";
+} from '/scripts/extensions.js';
 
 import { 
     saveSettingsDebounced,
     eventSource,
-    event_types
-} from "../../../../script.js";
+    event_types,
+    setExtensionPrompt,
+    extension_prompt_types,
+    extension_prompt_roles,
+    chat // Import chat directly to access history if needed
+} from '/script.js';
 
 const extensionName = "ragflow-lore";
 
 // 1. Default Settings
 const defaultSettings = {
     enabled: true,
-    baseUrl: 'https://rag.latour.live', // Updated to your working HTTPS URL
+    baseUrl: 'localhost',
     apiKey: '',
     datasetId: '',
-    similarityThreshold: 0.1, // Lowered default to 0.1 to match your curl success
+    similarityThreshold: 0.1,
     maxChunks: 3,
     useKg: false,
     keyword: false,
@@ -30,35 +32,22 @@ const defaultSettings = {
     injectSuffix: '\n]\n</ragflow_context>\n'
 };
 
-// Global State: We store the PROMISE, not just the string. 
-// This allows us to "await" it in a later event, guaranteeing synchronization.
+// Global State
+// We track the promise primarily for debugging, but we act on resolution immediately.
 let loreFetchPromise = null;
 
 // 2. Core Logic (RAGFlow Interaction)
 async function fetchRagflowContext(query, overrides = {}) {
     const settings = extension_settings[extensionName];
     
+    // Validation
     if (!settings.apiKey || !settings.datasetId) {
-        console.warn('[RAGFlow] API Key or Dataset ID missing.');
         return null;
     }
 
     const cleanUrl = settings.baseUrl.replace(/\/$/, '');
     const url = `${cleanUrl}/api/v1/retrieval`;
 
-    // --- SECURITY CHECK: Mixed Content ---
-    const isPageSecure = window.location.protocol === 'https:';
-    const isApiInsecure = cleanUrl.startsWith('http:');
-    const isLocalhost = cleanUrl.includes('localhost') || cleanUrl.includes('127.0.0.1');
-
-    if (isPageSecure && isApiInsecure && !isLocalhost) {
-        const errorMsg = "Mixed Content Error: Your browser blocked the request because SillyTavern is HTTPS but RAGFlow is HTTP.";
-        console.error(`[RAGFlow] ${errorMsg}`);
-        toastr.error("Browser Blocked Request. Access SillyTavern via HTTP or use your https://rag.latour.live URL.", "Security Error");
-        return null;
-    }
-    
-    // Determine effective settings
     const threshold = overrides.similarity_threshold !== undefined 
         ? overrides.similarity_threshold 
         : parseFloat(settings.similarityThreshold);
@@ -78,7 +67,7 @@ async function fetchRagflowContext(query, overrides = {}) {
         if (!isNaN(rid)) payload.rerank_id = rid;
     }
 
-    console.log(`[RAGFlow DEBUG] Sending Query to ${url}: "${query}" (Threshold: ${threshold})`);
+    console.debug(`[RAGFlow] Fetching context for: "${query.substring(0, 50)}..."`);
 
     try {
         const response = await fetch(url, {
@@ -100,6 +89,7 @@ async function fetchRagflowContext(query, overrides = {}) {
         let chunks = [];
         let rawItems = [];
 
+        // RAGFlow API structure compatibility check
         if (data.code === 0 && data.data && Array.isArray(data.data.chunks)) {
              rawItems = data.data.chunks;
         } else if (data.data && Array.isArray(data.data.rows)) {
@@ -107,29 +97,51 @@ async function fetchRagflowContext(query, overrides = {}) {
         }
 
         if (rawItems.length > 0) {
-            console.log(`[RAGFlow DEBUG] Received ${rawItems.length} potential chunks.`);
-            chunks = rawItems.map((item, index) => {
-                const content = item.content_with_weight || item.content || item.text || "";
-                const score = item.similarity || item.vector_similarity || item.score || 0;
-                // Log score to help user debug thresholds
-                console.log(`[RAGFlow DEBUG] Chunk #${index + 1} Score: ${score.toFixed(4)}`);
-                return content;
+            chunks = rawItems.map((item) => {
+                return item.content_with_weight || item.content || item.text || "";
             });
+            console.log(`[RAGFlow] Received ${chunks.length} chunks.`);
         } else {
-            console.log(`[RAGFlow DEBUG] Query returned 0 chunks (Threshold was ${threshold}).`);
+            console.debug(`[RAGFlow] Query returned 0 chunks (Threshold: ${threshold}).`);
         }
 
         if (chunks.length === 0) return null;
         return chunks.join('\n...\n');
 
     } catch (error) {
-        console.error('[RAGFlow DEBUG] Fetch Error:', error);
-        toastr.error(`RAGFlow Error: ${error.message}`);
+        console.error('[RAGFlow] Fetch Error:', error);
+        // Optional: toastr.error(`RAGFlow Error: ${error.message}`);
         return null;
     }
 }
 
-// 3. Settings Management
+/**
+ * Updates the SillyTavern extension prompt slot.
+ * This updates the global state so it's ready whenever ST generates a prompt.
+ */
+function updateInjectedPrompt(content = '') {
+    const settings = extension_settings[extensionName];
+    
+    // If disabled or empty content, clear the prompt slot
+    if (!settings.enabled || !content) {
+        setExtensionPrompt(extensionName, extension_prompt_types.IN_CHAT, '', extension_prompt_roles.SYSTEM);
+        return;
+    }
+
+    const fullInjection = `${settings.injectPrefix}${content}${settings.injectSuffix}`;
+    
+    // Inject into the IN_CHAT depth (standard depth for context injection)
+    // extension_prompt_roles.SYSTEM ensures it is treated as a system instruction
+    setExtensionPrompt(
+        extensionName, 
+        extension_prompt_types.IN_CHAT, 
+        fullInjection, 
+        extension_prompt_roles.SYSTEM
+    );
+    console.debug("[RAGFlow] Prompt slot updated with new context.");
+}
+
+// 3. Settings & UI Management
 async function loadSettings() {
     extension_settings[extensionName] = extension_settings[extensionName] || {};
     const settings = extension_settings[extensionName];
@@ -139,7 +151,7 @@ async function loadSettings() {
         }
     }
     
-    // Update UI
+    // Update UI Elements
     $("#ragflow_enabled").prop("checked", settings.enabled);
     $("#ragflow_baseUrl").val(settings.baseUrl);
     $("#ragflow_apiKey").val(settings.apiKey);
@@ -171,6 +183,7 @@ function onSettingChange(event) {
 
 // 4. Initialization
 jQuery(async () => {
+    // Inject Settings UI into the Extensions Panel
     const settingsHtml = `
     <div class="ragflow-extension-settings">
         <div class="inline-drawer">
@@ -187,7 +200,7 @@ jQuery(async () => {
                 </div>
                 <div class="flex-container">
                     <label>Base URL</label>
-                    <input type="text" class="text_pole" id="ragflow_baseUrl" placeholder="https://rag.yourdomain.com" />
+                    <input type="text" class="text_pole" id="ragflow_baseUrl" placeholder="https://rag.latour.live" />
                 </div>
                 <div class="flex-container">
                     <label>API Key</label>
@@ -222,16 +235,12 @@ jQuery(async () => {
                     </label>
                 </div>
                 <div class="flex-container">
-                    <label>Rerank Model ID (Integer, Optional)</label>
+                    <label>Rerank Model ID (Optional)</label>
                     <input type="number" class="text_pole" id="ragflow_rerankId" placeholder="e.g. 1" />
                 </div>
 
                 <div class="flex-container" style="margin-top:15px;">
                     <button id="ragflow_test_btn" class="menu_button">Test Connection</button>
-                </div>
-
-                <div class="flex-container">
-                    <small><i>Check browser console (F12) for detailed logs.</i></small>
                 </div>
             </div>
         </div>
@@ -240,6 +249,7 @@ jQuery(async () => {
 
     $("#extensions_settings").append(settingsHtml);
 
+    // Bind Event Listeners for Settings
     $("#ragflow_enabled").on("change", onSettingChange);
     $("#ragflow_baseUrl").on("input", onSettingChange);
     $("#ragflow_apiKey").on("input", onSettingChange);
@@ -250,96 +260,94 @@ jQuery(async () => {
     $("#ragflow_keyword").on("change", onSettingChange);
     $("#ragflow_rerankId").on("input", onSettingChange);
 
-    // TEST BUTTON
+    // Test Button Logic
     $("#ragflow_test_btn").on("click", async function(e) {
         e.preventDefault();
         toastr.info("Sending test query...", "RAGFlow");
-        // Force extremely low threshold for testing
         const result = await fetchRagflowContext("test connection check", { similarity_threshold: 0.01 });
         if (result) {
             toastr.success("Connection Successful!", "RAGFlow");
             alert("RAGFlow Response:\n----------------\n" + result);
+        } else {
+            toastr.warning("Connection technically worked but returned no results (or check console for errors).", "RAGFlow");
         }
     });
 
+    // Load initial settings
     loadSettings();
 
-    // EVENT 1: Input Handling (Start the Fetch)
-    eventSource.on(event_types.chat_input_handling, (data) => {
+    // --- MAIN EVENT LOOP ---
+
+    /**
+     * TRIGGER 1: chat_input_handling
+     * Fired when user presses Enter/Send. This is the earliest possible hook.
+     * We start the fetch here to race against the prompt generation.
+     */
+    eventSource.on(event_types.chat_input_handling, async (data) => {
         const settings = extension_settings[extensionName];
         if (!settings?.enabled) return;
-        
-        console.log('[RAGFlow DEBUG] Event: chat_input_handling fired.');
 
         const userQuery = data.text;
-        if (!userQuery || userQuery.trim().length < 5) {
-            console.log('[RAGFlow DEBUG] Query too short, clearing promise.');
+        
+        // Basic filter for empty or very short queries
+        if (!userQuery || userQuery.trim().length < 2) {
+            updateInjectedPrompt(''); // Clear previous context
             loreFetchPromise = null;
             return;
         }
 
-        console.log('[RAGFlow DEBUG] User Input detected. Starting background fetch promise...');
-        toastr.info("Searching RAGFlow...", "Lore Injector", { timeOut: 1500 });
+        console.debug('[RAGFlow] User Input detected. Starting background fetch...');
         
-        // CRITICAL: We save the PROMISE here, so we can await it later.
-        loreFetchPromise = fetchRagflowContext(userQuery).then(res => {
-            console.log(`[RAGFlow DEBUG] Promise Resolved. Result length: ${res ? res.length : 0}`);
-            return res;
-        }).catch(err => {
-            console.error("[RAGFlow DEBUG] Promise Rejected:", err);
-            return null;
+        // Start the fetch and immediately attach the handler to update the prompt when done.
+        // We do NOT await here, or we would block the UI.
+        loreFetchPromise = fetchRagflowContext(userQuery).then(result => {
+            console.debug(`[RAGFlow] Fetch complete. Result found: ${!!result}`);
+            updateInjectedPrompt(result);
+            return result;
         });
     });
 
-    // EVENT 2: Prompt Ready (Wait for Data & Inject)
-    eventSource.on(event_types.chat_completion_prompt_ready, async (data) => {
-        console.log('[RAGFlow DEBUG] Event: chat_completion_prompt_ready fired.');
+    /**
+     * TRIGGER 2: MESSAGE_SWIPED / MESSAGE_REGENERATED
+     * If the user swipes, the previous 'input' event won't fire. 
+     * We need to fetch based on the LAST message in chat.
+     */
+    const onRegenerate = async () => {
+        const settings = extension_settings[extensionName];
+        if (!settings?.enabled) return;
+
+        // Get the last user message from chat history
+        if (!chat || chat.length === 0) return;
         
-        // If no fetch is pending, do nothing
-        if (!loreFetchPromise) {
-            console.log('[RAGFlow DEBUG] No active RAGFlow promise found. Skipping injection.');
-            return;
+        // Find last user message
+        let lastUserMes = null;
+        for (let i = chat.length - 1; i >= 0; i--) {
+            if (!chat[i].is_system && chat[i].is_user) {
+                lastUserMes = chat[i].mes;
+                break;
+            }
         }
 
-        console.log('[RAGFlow DEBUG] Promise found. Awaiting RAG fetch to finish...');
-        
-        // CRITICAL: Force SillyTavern generation to PAUSE until RAGFlow replies
-        const result = await loreFetchPromise;
-        
-        console.log('[RAGFlow DEBUG] Fetch complete. Result:', result ? 'Has Data' : 'Null');
-
-        if (result) {
-            const settings = extension_settings[extensionName];
-            const injection = `${settings.injectPrefix}${result}${settings.injectSuffix}`;
-            
-            let injected = false;
-
-            console.log('[RAGFlow DEBUG] Attempting injection. Available keys:', Object.keys(data));
-
-            if (data.system_prompt !== undefined) {
-                console.log(`[RAGFlow DEBUG] Injecting into system_prompt. Old length: ${data.system_prompt.length}`);
-                data.system_prompt += injection;
-                injected = true;
-            } 
-            else if (data.story_string !== undefined) {
-                console.log(`[RAGFlow DEBUG] Injecting into story_string. Old length: ${data.story_string.length}`);
-                data.story_string += injection;
-                injected = true;
-            } else {
-                console.warn('[RAGFlow DEBUG] No suitable injection target (system_prompt or story_string) found!');
-            }
-
-            if (injected) {
-                toastr.success("Context Injected!", "RAGFlow", { timeOut: 2000 });
-                console.log('[RAGFlow DEBUG] Injection successful.');
-            }
-        } else {
-            console.log('[RAGFlow DEBUG] Fetch finished but returned no valid context (or error occurred).');
+        if (lastUserMes) {
+            console.debug('[RAGFlow] Regeneration detected. Refetching context...');
+            loreFetchPromise = fetchRagflowContext(lastUserMes).then(result => {
+                updateInjectedPrompt(result);
+                return result;
+            });
         }
-        
-        // Cleanup
+    };
+
+    eventSource.on(event_types.MESSAGE_SWIPED, onRegenerate);
+    // event_types.MESSAGE_REGENERATED might not exist in all ST versions, usually handled by SWIPED or internal logic
+    if (event_types.MESSAGE_REGENERATED) {
+        eventSource.on(event_types.MESSAGE_REGENERATED, onRegenerate);
+    }
+
+    // Reset prompt on chat change to prevent context bleeding
+    eventSource.on(event_types.CHAT_CHANGED, () => {
+        updateInjectedPrompt('');
         loreFetchPromise = null;
     });
 
-    console.log("[RAGFlow] Extension loaded.");
+    console.log("[RAGFlow] Lore Injector Aligned & Loaded.");
 });
