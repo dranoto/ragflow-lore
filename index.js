@@ -18,20 +18,21 @@ const extensionName = "ragflow-lore";
 // 1. Default Settings
 const defaultSettings = {
     enabled: true,
-    baseUrl: 'http://localhost:9380',
+    baseUrl: 'https://rag.latour.live', // Updated to your working HTTPS URL
     apiKey: '',
     datasetId: '',
-    similarityThreshold: 0.2,
+    similarityThreshold: 0.1, // Lowered default to 0.1 to match your curl success
     maxChunks: 3,
     useKg: false,
     keyword: false,
-    rerankId: '', // Default to empty (will be parsed to int if set)
+    rerankId: '', 
     injectPrefix: '\n\n<ragflow_context>\n[Relevant excerpts from the original novel for this scene:\n',
     injectSuffix: '\n]\n</ragflow_context>\n'
 };
 
-// Global state
-let pendingLore = "";
+// Global State: We store the PROMISE, not just the string. 
+// This allows us to "await" it in a later event, guaranteeing synchronization.
+let loreFetchPromise = null;
 
 // 2. Core Logic (RAGFlow Interaction)
 async function fetchRagflowContext(query, overrides = {}) {
@@ -50,20 +51,18 @@ async function fetchRagflowContext(query, overrides = {}) {
     const isApiInsecure = cleanUrl.startsWith('http:');
     const isLocalhost = cleanUrl.includes('localhost') || cleanUrl.includes('127.0.0.1');
 
-    // Browsers often allow http://localhost from https, but BLOCK http://192.168...
     if (isPageSecure && isApiInsecure && !isLocalhost) {
         const errorMsg = "Mixed Content Error: Your browser blocked the request because SillyTavern is HTTPS but RAGFlow is HTTP.";
         console.error(`[RAGFlow] ${errorMsg}`);
-        toastr.error("Browser Blocked Request. You cannot access an insecure HTTP API from an HTTPS page. Access SillyTavern via HTTP or secure your API.", "Security Error", { timeOut: 10000 });
+        toastr.error("Browser Blocked Request. Access SillyTavern via HTTP or use your https://rag.latour.live URL.", "Security Error");
         return null;
     }
     
-    // Determine effective settings (allow overrides for testing)
+    // Determine effective settings
     const threshold = overrides.similarity_threshold !== undefined 
         ? overrides.similarity_threshold 
         : parseFloat(settings.similarityThreshold);
 
-    // Construct Payload
     const payload = {
         question: query,
         dataset_ids: [settings.datasetId],
@@ -74,17 +73,12 @@ async function fetchRagflowContext(query, overrides = {}) {
         keyword: settings.keyword
     };
 
-    // Parse Rerank ID as Integer (Strict Requirement)
     if (settings.rerankId && settings.rerankId.toString().trim() !== '') {
         const rid = parseInt(settings.rerankId, 10);
-        if (!isNaN(rid)) {
-            payload.rerank_id = rid;
-        } else {
-            console.warn("[RAGFlow] Rerank ID provided is not a valid integer. Ignoring.");
-        }
+        if (!isNaN(rid)) payload.rerank_id = rid;
     }
 
-    console.log(`[RAGFlow] POST ${url}`, payload);
+    console.log(`[RAGFlow] Sending Query: "${query}" (Threshold: ${threshold})`);
 
     try {
         const response = await fetch(url, {
@@ -98,17 +92,14 @@ async function fetchRagflowContext(query, overrides = {}) {
 
         if (!response.ok) {
             const errText = await response.text();
-            console.error('[RAGFlow] Server responded with error:', errText);
-            throw new Error(`${response.status} ${response.statusText}`);
+            throw new Error(`${response.status} ${response.statusText} - ${errText}`);
         }
         
         const data = await response.json();
-        console.log('[RAGFlow] Raw Response Data:', data);
         
         let chunks = [];
         let rawItems = [];
 
-        // Parse: Handle generic vs chunk vs row formats
         if (data.code === 0 && data.data && Array.isArray(data.data.chunks)) {
              rawItems = data.data.chunks;
         } else if (data.data && Array.isArray(data.data.rows)) {
@@ -116,31 +107,24 @@ async function fetchRagflowContext(query, overrides = {}) {
         }
 
         if (rawItems.length > 0) {
-            console.log(`[RAGFlow] Found ${rawItems.length} items.`);
+            console.log(`[RAGFlow] Received ${rawItems.length} potential chunks.`);
             chunks = rawItems.map((item, index) => {
-                // Try to find the content field
                 const content = item.content_with_weight || item.content || item.text || "";
                 const score = item.similarity || item.vector_similarity || item.score || 0;
-                console.log(`[RAGFlow] Chunk #${index + 1} (Score: ${score}):`, content.substring(0, 50) + "...");
+                // Log score to help user debug thresholds
+                console.log(`[RAGFlow] Chunk #${index + 1} Score: ${score.toFixed(4)}`);
                 return content;
             });
+        } else {
+            console.log(`[RAGFlow] Query returned 0 chunks (Threshold was ${threshold}).`);
         }
 
-        if (chunks.length === 0) {
-            console.warn('[RAGFlow] Request succeeded but returned 0 chunks. Check your Threshold setting vs the Score in logs.');
-            return null;
-        }
-        
+        if (chunks.length === 0) return null;
         return chunks.join('\n...\n');
+
     } catch (error) {
-        console.error('[RAGFlow] Search failed completely:', error);
-        
-        // Specific CORS advice
-        if (error.name === 'TypeError' && error.message === 'Failed to fetch') {
-            toastr.error("Network Error (CORS). Your browser blocked the request. Check console for details.", "RAGFlow");
-        } else {
-            toastr.error(`Error: ${error.message}`, "RAGFlow");
-        }
+        console.error('[RAGFlow] Fetch Error:', error);
+        toastr.error(`RAGFlow Error: ${error.message}`);
         return null;
     }
 }
@@ -203,7 +187,7 @@ jQuery(async () => {
                 </div>
                 <div class="flex-container">
                     <label>Base URL</label>
-                    <input type="text" class="text_pole" id="ragflow_baseUrl" placeholder="http://localhost:9380" />
+                    <input type="text" class="text_pole" id="ragflow_baseUrl" placeholder="https://rag.yourdomain.com" />
                 </div>
                 <div class="flex-container">
                     <label>API Key</label>
@@ -266,70 +250,77 @@ jQuery(async () => {
     $("#ragflow_keyword").on("change", onSettingChange);
     $("#ragflow_rerankId").on("input", onSettingChange);
 
-    // TEST BUTTON LISTENER
+    // TEST BUTTON
     $("#ragflow_test_btn").on("click", async function(e) {
         e.preventDefault();
         toastr.info("Sending test query...", "RAGFlow");
-        console.log("[RAGFlow] Test button clicked.");
-        
-        // Force a very low threshold (0.01) to verify connectivity 
-        // even if the query is nonsense.
+        // Force extremely low threshold for testing
         const result = await fetchRagflowContext("test connection check", { similarity_threshold: 0.01 });
-        
         if (result) {
-            toastr.success("Connection Successful! Chunks found.", "RAGFlow");
-            alert("RAGFlow Response (Low Threshold Test):\n----------------\n" + result);
-        } else {
-            // Error is handled in fetchRagflowContext via toastr
-            console.log("[RAGFlow] Test failed.");
+            toastr.success("Connection Successful!", "RAGFlow");
+            alert("RAGFlow Response:\n----------------\n" + result);
         }
     });
 
     loadSettings();
 
-    // EVENT 1: Input Handling
-    eventSource.on(event_types.chat_input_handling, async (data) => {
+    // EVENT 1: Input Handling (Start the Fetch)
+    eventSource.on(event_types.chat_input_handling, (data) => {
         const settings = extension_settings[extensionName];
         if (!settings?.enabled) return;
         
-        pendingLore = ""; 
         const userQuery = data.text;
-        
-        if (!userQuery || userQuery.trim().length < 5) return;
+        if (!userQuery || userQuery.trim().length < 5) {
+            loreFetchPromise = null;
+            return;
+        }
 
-        // Visual feedback
+        console.log('[RAGFlow] User Input detected. Starting background fetch...');
         toastr.info("Searching RAGFlow...", "Lore Injector", { timeOut: 1500 });
         
-        const result = await fetchRagflowContext(userQuery);
-
-        if (result) {
-            pendingLore = `${settings.injectPrefix}${result}${settings.injectSuffix}`;
-            console.log('[RAGFlow] Lore ready to inject.');
-        }
+        // CRITICAL: We save the PROMISE here, so we can await it later.
+        // We do not await it here, so UI stays responsive.
+        loreFetchPromise = fetchRagflowContext(userQuery).catch(err => {
+            console.error("RAGFlow background fetch failed", err);
+            return null;
+        });
     });
 
-    // EVENT 2: Prompt Injection
-    eventSource.on(event_types.chat_completion_prompt_ready, (data) => {
-        if (!pendingLore) return;
+    // EVENT 2: Prompt Ready (Wait for Data & Inject)
+    eventSource.on(event_types.chat_completion_prompt_ready, async (data) => {
+        // If no fetch is pending, do nothing
+        if (!loreFetchPromise) return;
 
-        let injected = false;
+        console.log('[RAGFlow] Prompt Ready. Waiting for RAG fetch to finish...');
+        
+        // CRITICAL: Force SillyTavern generation to PAUSE until RAGFlow replies
+        const result = await loreFetchPromise;
+        
+        if (result) {
+            const settings = extension_settings[extensionName];
+            const injection = `${settings.injectPrefix}${result}${settings.injectSuffix}`;
+            
+            let injected = false;
 
-        if (data.system_prompt !== undefined) {
-            data.system_prompt += pendingLore;
-            injected = true;
-        } 
-        else if (data.story_string !== undefined) {
-            data.story_string += pendingLore;
-            injected = true;
-        }
-        else {
-             console.warn('[RAGFlow] Could not find system_prompt or story_string.');
-        }
+            if (data.system_prompt !== undefined) {
+                data.system_prompt += injection;
+                injected = true;
+            } 
+            else if (data.story_string !== undefined) {
+                data.story_string += injection;
+                injected = true;
+            }
 
-        if (injected) {
-            toastr.success("Context Injected!", "RAGFlow", { timeOut: 2000 });
-            console.log('[RAGFlow] Injection successful.');
+            if (injected) {
+                toastr.success("Context Injected!", "RAGFlow", { timeOut: 2000 });
+                console.log('[RAGFlow] Injection successful.');
+            }
+        } else {
+            console.log('[RAGFlow] Fetch finished but returned no valid context.');
         }
+        
+        // Cleanup
+        loreFetchPromise = null;
     });
 
     console.log("[RAGFlow] Extension loaded.");
