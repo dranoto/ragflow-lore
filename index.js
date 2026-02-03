@@ -26,8 +26,8 @@ const defaultSettings = {
     datasetId: '',
     similarityThreshold: 0.5,
     maxChunks: 3,
-    injectPrefix: '\n[Relevant excerpts from the original novel for this scene:\n',
-    injectSuffix: '\n]\n'
+    injectPrefix: '\n\n<ragflow_context>\n[Relevant excerpts from the original novel for this scene:\n',
+    injectSuffix: '\n]\n</ragflow_context>\n'
 };
 
 // Global state
@@ -37,11 +37,16 @@ let pendingLore = "";
 async function fetchRagflowContext(query) {
     const settings = extension_settings[extensionName];
     
-    if (!settings.apiKey || !settings.datasetId) return null;
+    if (!settings.apiKey || !settings.datasetId) {
+        console.warn('[RAGFlow] API Key or Dataset ID missing.');
+        return null;
+    }
 
     const cleanUrl = settings.baseUrl.replace(/\/$/, '');
     const url = `${cleanUrl}/api/v1/datasets/${settings.datasetId}/search`;
     
+    console.log(`[RAGFlow] Querying: ${url}`);
+
     try {
         const response = await fetch(url, {
             method: 'POST',
@@ -56,8 +61,13 @@ async function fetchRagflowContext(query) {
             })
         });
 
-        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+        if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`${response.status} ${response.statusText} - ${errText}`);
+        }
+        
         const data = await response.json();
+        console.log('[RAGFlow] Raw Response:', data);
         
         let chunks = [];
         if (data.data && Array.isArray(data.data.rows)) {
@@ -68,29 +78,30 @@ async function fetchRagflowContext(query) {
             chunks = data.results.map(r => r.content || r.text);
         }
 
-        if (chunks.length === 0) return null;
+        if (chunks.length === 0) {
+            console.log('[RAGFlow] No chunks returned.');
+            return null;
+        }
+        
         return chunks.join('\n...\n');
     } catch (error) {
         console.error('[RAGFlow] Search failed:', error);
-        toastr.error('RAGFlow search failed. Check console.');
+        toastr.error(`RAGFlow Error: ${error.message}`);
         return null;
     }
 }
 
-// 3. Settings Management (Matches Example Logic)
+// 3. Settings Management
 async function loadSettings() {
-    // Ensure the settings object exists
     extension_settings[extensionName] = extension_settings[extensionName] || {};
-    
-    // Assign defaults if keys are missing
     const settings = extension_settings[extensionName];
     for (const key in defaultSettings) {
         if (!settings.hasOwnProperty(key)) {
             settings[key] = defaultSettings[key];
         }
     }
-
-    // Update UI elements to match settings
+    
+    // Update UI
     $("#ragflow_enabled").prop("checked", settings.enabled);
     $("#ragflow_baseUrl").val(settings.baseUrl);
     $("#ragflow_apiKey").val(settings.apiKey);
@@ -103,34 +114,19 @@ function onSettingChange(event) {
     const id = event.target.id;
     const settings = extension_settings[extensionName];
     
-    // Update settings object based on input ID
     switch (id) {
-        case "ragflow_enabled":
-            settings.enabled = !!$(event.target).prop("checked");
-            break;
-        case "ragflow_baseUrl":
-            settings.baseUrl = $(event.target).val();
-            break;
-        case "ragflow_apiKey":
-            settings.apiKey = $(event.target).val();
-            break;
-        case "ragflow_datasetId":
-            settings.datasetId = $(event.target).val();
-            break;
-        case "ragflow_maxChunks":
-            settings.maxChunks = parseInt($(event.target).val());
-            break;
-        case "ragflow_similarity":
-            settings.similarityThreshold = parseFloat($(event.target).val());
-            break;
+        case "ragflow_enabled": settings.enabled = !!$(event.target).prop("checked"); break;
+        case "ragflow_baseUrl": settings.baseUrl = $(event.target).val(); break;
+        case "ragflow_apiKey": settings.apiKey = $(event.target).val(); break;
+        case "ragflow_datasetId": settings.datasetId = $(event.target).val(); break;
+        case "ragflow_maxChunks": settings.maxChunks = parseInt($(event.target).val()); break;
+        case "ragflow_similarity": settings.similarityThreshold = parseFloat($(event.target).val()); break;
     }
-    
     saveSettingsDebounced();
 }
 
-// 4. Initialization (The Standard Way)
+// 4. Initialization
 jQuery(async () => {
-    // Inline HTML Template (Replacing the $.get call from the example)
     const settingsHtml = `
     <div class="ragflow-extension-settings">
         <div class="inline-drawer">
@@ -147,7 +143,7 @@ jQuery(async () => {
                 </div>
                 <div class="flex-container">
                     <label>Base URL</label>
-                    <input type="text" class="text_pole" id="ragflow_baseUrl" />
+                    <input type="text" class="text_pole" id="ragflow_baseUrl" placeholder="http://localhost:9380" />
                 </div>
                 <div class="flex-container">
                     <label>API Key</label>
@@ -165,15 +161,16 @@ jQuery(async () => {
                     <label>Similarity</label>
                     <input type="number" class="text_pole" id="ragflow_similarity" step="0.1" />
                 </div>
+                <div class="flex-container">
+                    <small><i>Check the browser console (F12) for detailed debug logs.</i></small>
+                </div>
             </div>
         </div>
     </div>
     `;
 
-    // Append to the settings menu (Standard ST Location)
     $("#extensions_settings").append(settingsHtml);
 
-    // Bind Listeners
     $("#ragflow_enabled").on("change", onSettingChange);
     $("#ragflow_baseUrl").on("input", onSettingChange);
     $("#ragflow_apiKey").on("input", onSettingChange);
@@ -181,32 +178,68 @@ jQuery(async () => {
     $("#ragflow_maxChunks").on("input", onSettingChange);
     $("#ragflow_similarity").on("input", onSettingChange);
 
-    // Initial Load
     loadSettings();
 
-    // Setup Logic Listeners
+    // -- DEBUG LOGGING --
+    console.log('[RAGFlow] Event Types Available:', Object.keys(event_types));
+
+    // EVENT 1: Input Handling (The Fetch)
     eventSource.on(event_types.chat_input_handling, async (data) => {
         const settings = extension_settings[extensionName];
         if (!settings?.enabled) return;
         
-        pendingLore = "";
+        pendingLore = ""; // Reset previous lore
         const userQuery = data.text;
-        if (!userQuery || userQuery.trim().length < 5) return;
+        
+        if (!userQuery || userQuery.trim().length < 5) {
+            console.log('[RAGFlow] Query too short, skipping.');
+            return;
+        }
 
-        console.log('[RAGFlow] Fetching...', userQuery);
+        console.log('[RAGFlow] 1. Input detected. Starting fetch for:', userQuery);
+        const startTime = Date.now();
+        
+        // This await is CRITICAL. It pauses SillyTavern's processing of this event
+        // until the fetch completes.
         const result = await fetchRagflowContext(userQuery);
+        
+        const duration = Date.now() - startTime;
+        console.log(`[RAGFlow] 2. Fetch completed in ${duration}ms`);
+
         if (result) {
             pendingLore = `${settings.injectPrefix}${result}${settings.injectSuffix}`;
-            console.log('[RAGFlow] Context ready.');
+            console.log('[RAGFlow] Lore prepared. Length:', pendingLore.length);
+        } else {
+            console.log('[RAGFlow] No lore found.');
         }
     });
 
+    // EVENT 2: Prompt Injection (The Action)
     eventSource.on(event_types.chat_completion_prompt_ready, (data) => {
-        if (pendingLore && data.system_prompt !== undefined) {
-            data.system_prompt += pendingLore;
-            console.log("[RAGFlow] Injected.");
+        console.log('[RAGFlow] 3. Prompt Ready Event Triggered.');
+        
+        if (!pendingLore) {
+            console.log('[RAGFlow] pendingLore is empty. Nothing to inject.');
+            return;
         }
+
+        // Try to find the best place to inject
+        if (data.system_prompt !== undefined) {
+            console.log('[RAGFlow] Injecting into data.system_prompt');
+            console.log('[RAGFlow] Old System Prompt Length:', data.system_prompt.length);
+            data.system_prompt += pendingLore;
+        } 
+        else if (data.story_string !== undefined) {
+            // Fallback for some backends
+            console.log('[RAGFlow] system_prompt missing, injecting into story_string');
+            data.story_string += pendingLore;
+        }
+        else {
+            console.warn('[RAGFlow] Could not find a field to inject lore into! keys:', Object.keys(data));
+        }
+
+        console.log('[RAGFlow] Injection complete.');
     });
 
-    console.log("[RAGFlow] Loaded successfully.");
+    console.log("[RAGFlow] Extension loaded successfully.");
 });
