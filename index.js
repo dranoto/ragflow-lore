@@ -34,7 +34,7 @@ const defaultSettings = {
 let pendingLore = "";
 
 // 2. Core Logic (RAGFlow Interaction)
-async function fetchRagflowContext(query) {
+async function fetchRagflowContext(query, overrides = {}) {
     const settings = extension_settings[extensionName];
     
     if (!settings.apiKey || !settings.datasetId) {
@@ -44,12 +44,30 @@ async function fetchRagflowContext(query) {
 
     const cleanUrl = settings.baseUrl.replace(/\/$/, '');
     const url = `${cleanUrl}/api/v1/retrieval`;
+
+    // --- SECURITY CHECK: Mixed Content ---
+    const isPageSecure = window.location.protocol === 'https:';
+    const isApiInsecure = cleanUrl.startsWith('http:');
+    const isLocalhost = cleanUrl.includes('localhost') || cleanUrl.includes('127.0.0.1');
+
+    // Browsers often allow http://localhost from https, but BLOCK http://192.168...
+    if (isPageSecure && isApiInsecure && !isLocalhost) {
+        const errorMsg = "Mixed Content Error: Your browser blocked the request because SillyTavern is HTTPS but RAGFlow is HTTP.";
+        console.error(`[RAGFlow] ${errorMsg}`);
+        toastr.error("Browser Blocked Request. You cannot access an insecure HTTP API from an HTTPS page. Access SillyTavern via HTTP or secure your API.", "Security Error", { timeOut: 10000 });
+        return null;
+    }
     
+    // Determine effective settings (allow overrides for testing)
+    const threshold = overrides.similarity_threshold !== undefined 
+        ? overrides.similarity_threshold 
+        : parseFloat(settings.similarityThreshold);
+
     // Construct Payload
     const payload = {
         question: query,
         dataset_ids: [settings.datasetId],
-        similarity_threshold: parseFloat(settings.similarityThreshold),
+        similarity_threshold: threshold,
         page_size: parseInt(settings.maxChunks),
         top_k: 1024,
         use_kg: settings.useKg,
@@ -254,11 +272,13 @@ jQuery(async () => {
         toastr.info("Sending test query...", "RAGFlow");
         console.log("[RAGFlow] Test button clicked.");
         
-        const result = await fetchRagflowContext("test connection check");
+        // Force a very low threshold (0.01) to verify connectivity 
+        // even if the query is nonsense.
+        const result = await fetchRagflowContext("test connection check", { similarity_threshold: 0.01 });
         
         if (result) {
             toastr.success("Connection Successful! Chunks found.", "RAGFlow");
-            alert("RAGFlow Response:\n----------------\n" + result);
+            alert("RAGFlow Response (Low Threshold Test):\n----------------\n" + result);
         } else {
             // Error is handled in fetchRagflowContext via toastr
             console.log("[RAGFlow] Test failed.");
