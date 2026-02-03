@@ -140,21 +140,21 @@ function updateInjectedPrompt(content = '') {
         return;
     }
     
-    if (!content) {
-        log("No content to inject. Clearing prompt slot.");
-        setExtensionPrompt(extensionName, extension_prompt_types.IN_CHAT, '', extension_prompt_roles.SYSTEM);
-        return;
-    }
-
-    log(`💉 Injecting content (${content.length} chars) into prompt slot.`);
-    const fullInjection = `${settings.injectPrefix}${content}${settings.injectSuffix}`;
+    const promptContent = content ? `${settings.injectPrefix}${content}${settings.injectSuffix}` : "";
     
+    log(`💉 Calling setExtensionPrompt (${promptContent.length} chars).`);
+    
+    // Inject into the IN_CHAT depth
     setExtensionPrompt(
         extensionName, 
         extension_prompt_types.IN_CHAT, 
-        fullInjection, 
+        promptContent, 
         extension_prompt_roles.SYSTEM
     );
+    
+    if (content) {
+        // toastr.success("Lore Context Updated", "RAGFlow");
+    }
 }
 
 // 3. Settings & UI Management
@@ -300,12 +300,19 @@ jQuery(async () => {
         // Load Settings
         loadSettings();
 
+        // --- HELPER ---
+        const getLastUserMessage = () => {
+            if (!chat || chat.length === 0) return null;
+            for (let i = chat.length - 1; i >= 0; i--) {
+                if (!chat[i].is_system && chat[i].is_user) {
+                    return chat[i].mes;
+                }
+            }
+            return null;
+        };
+
         // --- MAIN LOGIC ---
 
-        /**
-         * Unified Trigger Handler
-         * Attempts to get the latest query from the event OR the chat history.
-         */
         const handleTrigger = async (eventName, eventData) => {
             const settings = extension_settings[extensionName];
             if (!settings?.enabled) return;
@@ -317,24 +324,12 @@ jQuery(async () => {
                 userQuery = eventData.text;
             } 
             else {
-                // For all other events, look at the last user message in the chat history
-                if (!chat || chat.length === 0) return;
-                
-                // Find last user message
-                let lastUserMes = null;
-                for (let i = chat.length - 1; i >= 0; i--) {
-                    if (!chat[i].is_system && chat[i].is_user) {
-                        lastUserMes = chat[i].mes;
-                        break;
-                    }
-                }
-                userQuery = lastUserMes;
+                userQuery = getLastUserMessage();
             }
 
             if (!userQuery || userQuery.trim().length < 2) return;
 
             // 2. Dedup Check
-            // If we already fetched this query recently, don't fetch again.
             if (userQuery === lastFetchedQuery) {
                 // log(`⏭️ Skipping duplicate fetch for: "${userQuery.substring(0, 20)}..."`);
                 return;
@@ -354,29 +349,76 @@ jQuery(async () => {
 
         // --- BIND TRIGGERS ---
 
-        // 1. Chat Input (Typing enter)
-        // Note: Using string literal to avoid undefined errors if event_types is missing key
+        // 1. Chat Input
         eventSource.on('chat_input_handling', (data) => handleTrigger('chat_input_handling', data));
 
-        // 2. User Message Rendered (Message appears in DOM)
+        // 2. User Message Rendered
         eventSource.on('user_message_rendered', (id) => handleTrigger('user_message_rendered', null));
         
-        // 3. Generation Started (Last resort, fires right before sending to LLM)
-        eventSource.on('generation_started', () => handleTrigger('generation_started', null));
+        // 3. Generation Started (With Dry Run Protection)
+        eventSource.on('generation_started', (type, buttons, dryRun) => {
+            if (dryRun) {
+                log("Skipping generation_started due to dryRun.");
+                return;
+            }
+            handleTrigger('generation_started', null);
+        });
 
         // 4. Swipe / Regenerate
         eventSource.on('MESSAGE_SWIPED', () => {
-             // On swipe, clear lastFetchedQuery so we force a re-check of the previous message
              lastFetchedQuery = ""; 
              handleTrigger('MESSAGE_SWIPED', null);
         });
 
-        // 5. Reset on Chat Change
+        // 5. Chat Changed
         eventSource.on('chat_id_changed', () => {
-            log(`🔔 Chat changed. Clearing context.`);
+            log(`🔔 Chat changed. Resetting state.`);
             updateInjectedPrompt('');
             loreFetchPromise = null;
-            lastFetchedQuery = "";
+            
+            // Wait for chat to load into DOM/Memory before setting dedup
+            setTimeout(() => {
+                const lastMsg = getLastUserMessage();
+                if (lastMsg) {
+                    lastFetchedQuery = lastMsg;
+                    log(`   Initialized history tracker to avoid auto-fetch (Last: "${lastMsg.substring(0,20)}...")`);
+                } else {
+                    lastFetchedQuery = "";
+                }
+            }, 500); // 500ms delay to let ST load chat
+        });
+
+        // 6. PROMPT READY (Final Safety Net)
+        const promptReadyEvent = event_types && event_types.CHAT_COMPLETION_PROMPT_READY ? event_types.CHAT_COMPLETION_PROMPT_READY : 'chat_completion_prompt_ready';
+        eventSource.on(promptReadyEvent, async (data) => {
+            log("⏳ Prompt Ready check...");
+            
+            let contentToInject = null;
+
+            // Scenario A: Promise is pending. Wait for it.
+            if (loreFetchPromise) {
+                log("   Waiting for pending RAG fetch...");
+                try {
+                    contentToInject = await loreFetchPromise;
+                } catch (e) { console.error(e); }
+            } 
+            // Scenario B: Promise is null, but maybe we just missed the window?
+            // (Note: we don't have the result stored globally other than in prompt slot, 
+            // so we rely on setExtensionPrompt having worked. 
+            // But if we want to double check...)
+            
+            if (contentToInject && data && data.system_prompt !== undefined) {
+                const settings = extension_settings[extensionName];
+                const marker = settings.injectPrefix.trim();
+                
+                if (!data.system_prompt.includes(marker)) {
+                    log("⚡ Manual Injection (setExtensionPrompt was too late or failed).");
+                    const injection = `${settings.injectPrefix}${contentToInject}${settings.injectSuffix}`;
+                    data.system_prompt += injection;
+                } else {
+                    log("   Context already present in prompt. Good.");
+                }
+            }
         });
 
         console.log("[RAGFlow] 3. Lore Injector Aligned & Loaded Successfully.");
