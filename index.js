@@ -89,7 +89,7 @@ eventSource.on(event_types.chat_completion_prompt_ready, (data) => {
 // 4. Build Settings UI
 function buildSettingsMenu() {
     const context = getContext();
-    const settings = context.extension_settings[extensionName];
+    const settings = context.extension_settings[extensionName] || { ...defaultSettings };
     const container = document.createElement('div');
     container.className = 'ragflow-settings-container';
 
@@ -133,7 +133,7 @@ jQuery(async () => {
         context.extension_settings[extensionName] = { ...defaultSettings };
     }
 
-    // Register with display name and ID
+    // Standard Registration
     context.registerExtension({
         name: "RAGFlow Lore Injector",
         id: extensionName,
@@ -142,4 +142,9 @@ jQuery(async () => {
         },
         settings: buildSettingsMenu 
     });
+
+    // Explicitly register settings to force the gear icon to appear
+    if (context.registerExtensionSettings) {
+        context.registerExtensionSettings(extensionName, buildSettingsMenu);
+    }
 });
