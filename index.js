@@ -14,8 +14,7 @@ import {
     setExtensionPrompt,
     extension_prompt_types,
     extension_prompt_roles,
-    chat, // Import chat directly to access history if needed
-    addWandItem // Import the Wand Menu helper
+    chat // Import chat directly to access history if needed
 } from '/script.js';
 
 const extensionName = "ragflow-lore";
@@ -31,7 +30,7 @@ const defaultSettings = {
     useKg: false,
     keyword: false,
     rerankId: '', 
-    timeout: 15000, // 15 seconds default timeout
+    timeout: 15000, 
     injectPrefix: '\n\n<ragflow_context>\n[Relevant excerpts from the original novel for this scene:\n',
     injectSuffix: '\n]\n</ragflow_context>\n'
 };
@@ -50,7 +49,6 @@ function log(msg, ...args) {
 async function fetchRagflowContext(query, overrides = {}) {
     const settings = extension_settings[extensionName];
     
-    // Validation
     if (!settings.apiKey || !settings.datasetId) {
         log("❌ Missing API Key or Dataset ID.");
         return null;
@@ -97,7 +95,7 @@ async function fetchRagflowContext(query, overrides = {}) {
             signal: controller.signal
         });
         
-        clearTimeout(timeoutId); // Clear timeout on response
+        clearTimeout(timeoutId);
 
         const duration = Date.now() - startTime;
         log(`📡 Response received in ${duration}ms. Status: ${response.status}`);
@@ -112,7 +110,6 @@ async function fetchRagflowContext(query, overrides = {}) {
         let chunks = [];
         let rawItems = [];
 
-        // RAGFlow API structure compatibility check
         if (data.code === 0 && data.data && Array.isArray(data.data.chunks)) {
              rawItems = data.data.chunks;
         } else if (data.data && Array.isArray(data.data.rows)) {
@@ -159,7 +156,6 @@ function updateInjectedPrompt(content = '') {
     
     log(`💉 Calling setExtensionPrompt (${promptContent.length} chars).`);
     
-    // Inject into the IN_CHAT depth
     setExtensionPrompt(
         extensionName, 
         extension_prompt_types.IN_CHAT, 
@@ -319,7 +315,7 @@ jQuery(async () => {
         loadSettings();
 
         // ---------------------------------------------------------------------
-        // FEATURE: Manual Trigger via Wand Menu (Story Mode style)
+        // FEATURE: Manual Fetch Logic
         // ---------------------------------------------------------------------
 
         const performManualFetch = async (sourceQuery) => {
@@ -339,9 +335,10 @@ jQuery(async () => {
             }
         };
 
-        // Inject into Wand Menu
-        if (typeof addWandItem === 'function') {
-            addWandItem({
+        // 1. SAFE Wand Menu Registration
+        // We check for window.addWandItem which is standard in recent ST versions
+        if (window.addWandItem) {
+            window.addWandItem({
                 id: 'ragflow_fetch',
                 icon: 'fa-solid fa-book-journal-whills',
                 title: 'Grab RAG Lore',
@@ -350,10 +347,75 @@ jQuery(async () => {
                     await performManualFetch(query);
                 }
             });
-            log("✅ Added 'Grab RAG Lore' to Wand Menu.");
+            log("✅ Added 'Grab RAG Lore' to Wand Menu via window.addWandItem");
         } else {
-            console.warn("[RAGFlow] addWandItem not found. Is your ST version up to date?");
+            console.warn("[RAGFlow] window.addWandItem not found. Falling back to input button.");
         }
+
+        // 2. Safe Slash Command Registration
+        if (window.registerSlashCommand) {
+            window.registerSlashCommand("rag", async (args, value) => {
+                const query = value || $("#send_textarea").val();
+                await performManualFetch(query);
+            }, [], "Manually fetch RAG lore based on input text", true, true);
+            log("✅ Registered /rag slash command.");
+        }
+
+        // 3. Fallback: Manual Button in Chat Bar
+        const btnId = "ragflow_input_btn";
+        
+        const injectButton = () => {
+            if ($(`#${btnId}`).length > 0) return; // Already exists
+
+            const btnHtml = `
+                <div id="${btnId}" class="mes_text_button fa-solid fa-book-journal-whills" 
+                     title="Grab RAG Lore (Fetch & Inject)" 
+                     style="margin-right: 10px; cursor: pointer; opacity: 0.7; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px;">
+                </div>
+            `;
+            
+            const containers = [
+                "#chat_input_buttons",
+                "#form_chat_buttons",
+                ".chat_input_buttons",
+                "#send_but_container"
+            ];
+
+            let foundContainer = null;
+            for (const sel of containers) {
+                if ($(sel).length > 0) {
+                    foundContainer = $(sel);
+                    break;
+                }
+            }
+
+            if (foundContainer) {
+                foundContainer.prepend(btnHtml);
+                
+                $(`#${btnId}`).on("click", async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const btn = $(`#${btnId}`);
+                    btn.css("opacity", "1.0").addClass("fa-spin");
+                    
+                    const query = $("#send_textarea").val();
+                    await performManualFetch(query);
+                    
+                    btn.css("opacity", "0.7").removeClass("fa-spin");
+                });
+                log("✅ Added Manual Button to Chat Bar.");
+            }
+        };
+
+        // Retry DOM injection for 5 seconds to catch slow loads
+        let retries = 0;
+        const retryInterval = setInterval(() => {
+            injectButton();
+            retries++;
+            if (retries > 5 || $(`#${btnId}`).length > 0) {
+                clearInterval(retryInterval);
+            }
+        }, 1000);
 
         // Reset prompt on chat change
         eventSource.on(event_types.CHAT_CHANGED, () => {
