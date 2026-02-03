@@ -26,6 +26,9 @@ const defaultSettings = {
     datasetId: '',
     similarityThreshold: 0.5,
     maxChunks: 3,
+    useKg: false,      // Knowledge Graph
+    keyword: false,    // Keyword Matching
+    rerankId: '',      // Reranker Model ID
     injectPrefix: '\n\n<ragflow_context>\n[Relevant excerpts from the original novel for this scene:\n',
     injectSuffix: '\n]\n</ragflow_context>\n'
 };
@@ -43,9 +46,26 @@ async function fetchRagflowContext(query) {
     }
 
     const cleanUrl = settings.baseUrl.replace(/\/$/, '');
-    const url = `${cleanUrl}/api/v1/datasets/${settings.datasetId}/search`;
+    const url = `${cleanUrl}/api/v1/retrieval`;
     
     console.log(`[RAGFlow] Querying: ${url}`);
+
+    // Construct Payload
+    // mapping maxChunks -> page_size ensures we strictly limit the output
+    const payload = {
+        question: query,
+        dataset_ids: [settings.datasetId],
+        similarity_threshold: parseFloat(settings.similarityThreshold),
+        page_size: parseInt(settings.maxChunks),
+        top_k: 1024, // Default high search depth for quality
+        use_kg: settings.useKg,
+        keyword: settings.keyword
+    };
+
+    // Only add rerank_id if user provided one
+    if (settings.rerankId && settings.rerankId.trim() !== '') {
+        payload.rerank_id = settings.rerankId.trim();
+    }
 
     try {
         const response = await fetch(url, {
@@ -54,11 +74,7 @@ async function fetchRagflowContext(query) {
                 'Authorization': `Bearer ${settings.apiKey}`,
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
-                query: query,
-                similarity_threshold: parseFloat(settings.similarityThreshold),
-                top_k: parseInt(settings.maxChunks)
-            })
+            body: JSON.stringify(payload)
         });
 
         if (!response.ok) {
@@ -70,7 +86,11 @@ async function fetchRagflowContext(query) {
         console.log('[RAGFlow] Raw Response:', data);
         
         let chunks = [];
-        if (data.data && Array.isArray(data.data.rows)) {
+        
+        if (data.code === 0 && data.data && Array.isArray(data.data.chunks)) {
+             chunks = data.data.chunks.map(c => c.content_with_weight || c.content);
+        } 
+        else if (data.data && Array.isArray(data.data.rows)) {
             chunks = data.data.rows.map(row => row.content_with_weight || row.content);
         } else if (Array.isArray(data.chunks)) {
             chunks = data.chunks.map(c => c.content_with_weight || c.content);
@@ -108,6 +128,11 @@ async function loadSettings() {
     $("#ragflow_datasetId").val(settings.datasetId);
     $("#ragflow_maxChunks").val(settings.maxChunks);
     $("#ragflow_similarity").val(settings.similarityThreshold);
+    
+    // New Fields
+    $("#ragflow_useKg").prop("checked", settings.useKg);
+    $("#ragflow_keyword").prop("checked", settings.keyword);
+    $("#ragflow_rerankId").val(settings.rerankId);
 }
 
 function onSettingChange(event) {
@@ -121,6 +146,10 @@ function onSettingChange(event) {
         case "ragflow_datasetId": settings.datasetId = $(event.target).val(); break;
         case "ragflow_maxChunks": settings.maxChunks = parseInt($(event.target).val()); break;
         case "ragflow_similarity": settings.similarityThreshold = parseFloat($(event.target).val()); break;
+        // New Fields
+        case "ragflow_useKg": settings.useKg = !!$(event.target).prop("checked"); break;
+        case "ragflow_keyword": settings.keyword = !!$(event.target).prop("checked"); break;
+        case "ragflow_rerankId": settings.rerankId = $(event.target).val(); break;
     }
     saveSettingsDebounced();
 }
@@ -161,6 +190,26 @@ jQuery(async () => {
                     <label>Similarity</label>
                     <input type="number" class="text_pole" id="ragflow_similarity" step="0.1" />
                 </div>
+
+                <hr />
+                
+                <div class="flex-container">
+                     <label class="checkbox_label">
+                        <input type="checkbox" id="ragflow_useKg" />
+                        Use Knowledge Graph
+                    </label>
+                </div>
+                 <div class="flex-container">
+                     <label class="checkbox_label">
+                        <input type="checkbox" id="ragflow_keyword" />
+                        Keyword Matching
+                    </label>
+                </div>
+                <div class="flex-container">
+                    <label>Rerank Model ID (Optional)</label>
+                    <input type="text" class="text_pole" id="ragflow_rerankId" placeholder="e.g. bge-reranker-v2-m3" />
+                </div>
+
                 <div class="flex-container">
                     <small><i>Check the browser console (F12) for detailed debug logs.</i></small>
                 </div>
@@ -177,6 +226,10 @@ jQuery(async () => {
     $("#ragflow_datasetId").on("input", onSettingChange);
     $("#ragflow_maxChunks").on("input", onSettingChange);
     $("#ragflow_similarity").on("input", onSettingChange);
+    // New Bindings
+    $("#ragflow_useKg").on("change", onSettingChange);
+    $("#ragflow_keyword").on("change", onSettingChange);
+    $("#ragflow_rerankId").on("input", onSettingChange);
 
     loadSettings();
 
@@ -199,8 +252,6 @@ jQuery(async () => {
         console.log('[RAGFlow] 1. Input detected. Starting fetch for:', userQuery);
         const startTime = Date.now();
         
-        // This await is CRITICAL. It pauses SillyTavern's processing of this event
-        // until the fetch completes.
         const result = await fetchRagflowContext(userQuery);
         
         const duration = Date.now() - startTime;
@@ -226,7 +277,6 @@ jQuery(async () => {
         // Try to find the best place to inject
         if (data.system_prompt !== undefined) {
             console.log('[RAGFlow] Injecting into data.system_prompt');
-            console.log('[RAGFlow] Old System Prompt Length:', data.system_prompt.length);
             data.system_prompt += pendingLore;
         } 
         else if (data.story_string !== undefined) {
