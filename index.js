@@ -1,4 +1,38 @@
-import { eventSource, event_types, saveSettingsDebounced, getContext } from '../../extensions.js';
+// DIAGNOSTIC: Check what's available in the global scope
+console.log('[RAGFlow-DEBUG] Starting extension load...');
+console.log('[RAGFlow-DEBUG] typeof eventSource:', typeof eventSource);
+console.log('[RAGFlow-DEBUG] typeof getContext:', typeof getContext);
+console.log('[RAGFlow-DEBUG] typeof require:', typeof require);
+
+// Try to get dependencies - handle both ES6 imports and CommonJS/global approaches
+let eventSource, event_types, saveSettingsDebounced, getContext;
+
+try {
+    // Try ES6 import first (may fail in older SillyTavern versions)
+    const extensionsModule = require('../../extensions.js');
+    eventSource = extensionsModule.eventSource;
+    event_types = extensionsModule.event_types;
+    saveSettingsDebounced = extensionsModule.saveSettingsDebounced;
+    getContext = extensionsModule.getContext;
+    console.log('[RAGFlow-DEBUG] Loaded via CommonJS require()');
+} catch (e) {
+    console.error('[RAGFlow-DEBUG] CommonJS require() failed:', e);
+    // Fall back to globals
+    console.log('[RAGFlow-DEBUG] Trying global variables...');
+    eventSource = window.eventSource;
+    event_types = window.event_types;
+    saveSettingsDebounced = window.saveSettingsDebounced;
+    getContext = window.getContext;
+}
+
+// Validate we have the required dependencies
+if (typeof getContext !== 'function') {
+    console.error('[RAGFlow-DEBUG] CRITICAL: getContext is not a function! Extension cannot load.');
+    console.error('[RAGFlow-DEBUG] Available globals:', Object.keys(window).filter(k => k.includes('event') || k.includes('context') || k.includes('extension')));
+    throw new Error('getContext function not available');
+}
+
+console.log('[RAGFlow-DEBUG] Dependencies loaded successfully');
 
 // 1. Default Settings
 const defaultSettings = {
@@ -128,26 +162,63 @@ function buildSettingsMenu() {
 
 // 5. Registration
 (function registerExtension() {
-    const context = getContext();
+    console.log('[RAGFlow-DEBUG] Starting registration IIFE...');
 
-    // Ensure settings object is initialized
-    if (!context.extension_settings[extensionName]) {
-        context.extension_settings[extensionName] = { ...defaultSettings };
-    }
+    try {
+        const context = getContext();
+        console.log('[RAGFlow-DEBUG] Got context:', context);
+        console.log('[RAGFlow-DEBUG] typeof context:', typeof context);
+        console.log('[RAGFlow-DEBUG] context keys:', context ? Object.keys(context) : 'null');
 
-    // Standard Registration
-    context.registerExtension({
-        name: "RAGFlow Lore Injector",
-        id: extensionName,
-        init: () => {
-            console.log("[RAGFlow] Extension Loaded.");
-            setupEventListeners();
-        },
-        settings: buildSettingsMenu 
-    });
+        // Ensure settings object is initialized
+        console.log('[RAGFlow-DEBUG] Checking extension_settings...');
+        if (!context.extension_settings) {
+            console.error('[RAGFlow-DEBUG] CRITICAL: context.extension_settings is undefined!');
+            throw new Error('context.extension_settings not available');
+        }
 
-    // Explicitly register settings to force the gear icon to appear
-    if (context.registerExtensionSettings) {
-        context.registerExtensionSettings(extensionName, buildSettingsMenu);
+        if (!context.extension_settings[extensionName]) {
+            console.log('[RAGFlow-DEBUG] Initializing settings...');
+            context.extension_settings[extensionName] = { ...defaultSettings };
+        }
+
+        // Check registration method
+        console.log('[RAGFlow-DEBUG] typeof context.registerExtension:', typeof context.registerExtension);
+
+        if (typeof context.registerExtension !== 'function') {
+            console.error('[RAGFlow-DEBUG] CRITICAL: context.registerExtension is not a function!');
+            console.error('[RAGFlow-DEBUG] Available methods:', Object.keys(context).filter(k => typeof context[k] === 'function'));
+            throw new Error('registerExtension method not available');
+        }
+
+        // Standard Registration
+        console.log('[RAGFlow-DEBUG] Calling registerExtension...');
+        context.registerExtension({
+            name: "RAGFlow Lore Injector",
+            id: extensionName,
+            init: () => {
+                console.log("[RAGFlow] Extension Loaded.");
+                setupEventListeners();
+            },
+            settings: buildSettingsMenu
+        });
+        console.log('[RAGFlow-DEBUG] registerExtension completed');
+
+        // Explicitly register settings to force the gear icon to appear
+        console.log('[RAGFlow-DEBUG] typeof context.registerExtensionSettings:', typeof context.registerExtensionSettings);
+        if (context.registerExtensionSettings) {
+            console.log('[RAGFlow-DEBUG] Calling registerExtensionSettings...');
+            context.registerExtensionSettings(extensionName, buildSettingsMenu);
+            console.log('[RAGFlow-DEBUG] registerExtensionSettings completed');
+        }
+
+        console.log('[RAGFlow-DEBUG] Registration completed successfully!');
+    } catch (error) {
+        console.error('[RAGFlow-DEBUG] ERROR during registration:', error);
+        console.error('[RAGFlow-DEBUG] Error stack:', error.stack);
+        console.error('[RAGFlow-DEBUG] Error name:', error.name);
+        console.error('[RAGFlow-DEBUG] Error message:', error.message);
+        // Re-throw to let SillyTavern catch it
+        throw error;
     }
 })();
