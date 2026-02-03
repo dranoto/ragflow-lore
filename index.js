@@ -14,6 +14,7 @@ import {
     setExtensionPrompt,
     extension_prompt_types,
     extension_prompt_roles,
+    registerSlashCommand, // Import directly!
     chat // Import chat directly to access history if needed
 } from '/script.js';
 
@@ -339,14 +340,20 @@ jQuery(async () => {
         };
 
         // 1. Register Slash Command (/rag)
-        if (window.registerSlashCommand) {
-            window.registerSlashCommand("rag", async (args, value) => {
-                const query = value || $("#send_textarea").val(); // Get argument OR chat input
+        // Use imported function instead of window check
+        if (typeof registerSlashCommand === 'function') {
+            registerSlashCommand("rag", async (args, value) => {
+                // If value is provided (arguments), use that. Otherwise use textarea.
+                const query = value ? value : $("#send_textarea").val(); 
                 await performManualFetch(query);
             }, [], "Manually fetch RAG lore based on input text", true, true);
+            log("✅ Registered /rag slash command.");
+        } else {
+            console.warn("[RAGFlow] registerSlashCommand not found/imported correctly.");
         }
 
         // 2. Inject Manual Button into Chat Bar
+        // We try multiple selectors to find where to put the button
         const btnId = "ragflow_input_btn";
         if ($(`#${btnId}`).length === 0) {
             const btnHtml = `
@@ -356,21 +363,31 @@ jQuery(async () => {
                 </div>
             `;
             
-            // Try to append before the send button row, or inside input controls
-            const container = $("#chat_input_buttons");
+            // Try standard location first
+            let container = $("#chat_input_buttons");
+            
+            // Fallback for different themes/versions
+            if (container.length === 0) container = $("#form_chat_buttons");
+            if (container.length === 0) container = $(".chat_input_buttons");
+
             if (container.length > 0) {
                 container.prepend(btnHtml);
                 
                 $(`#${btnId}`).on("click", async (e) => {
                     e.preventDefault();
                     // Add visual feedback
-                    $(`#${btnId}`).css("opacity", "1.0").addClass("fa-spin");
+                    const btn = $(`#${btnId}`);
+                    btn.css("opacity", "1.0").addClass("fa-spin");
+                    
                     const query = $("#send_textarea").val();
                     await performManualFetch(query);
-                    $(`#${btnId}`).css("opacity", "0.7").removeClass("fa-spin");
+                    
+                    btn.css("opacity", "0.7").removeClass("fa-spin");
                 });
                 
                 log("✅ Added Manual 'Grab RAG Lore' button to chat bar.");
+            } else {
+                log("⚠️ Could not find chat input buttons container. Manual button not added.");
             }
         }
 
