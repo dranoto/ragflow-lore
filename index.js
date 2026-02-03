@@ -147,8 +147,17 @@ function buildSettingsMenu() {
     return container;
 }
 
-jQuery(async () => {
-    if (context.registerExtensionSettings) {
-        context.registerExtensionSettings(extensionName, buildSettingsMenu);
+// 6. Register Extension
+// This part is critical for the extension to appear in the list and load settings.
+context.registerExtension({
+    name: extensionName, 
+    id: extensionName, 
+    init: function() {
+        if (context.registerExtensionSettings) {
+            context.registerExtensionSettings(extensionName, buildSettingsMenu);
+        } else {
+            console.error("[RAGFlow] registerExtensionSettings not available. Update SillyTavern.");
+        }
+        console.log("[RAGFlow] Extension Loaded.");
     }
 });
