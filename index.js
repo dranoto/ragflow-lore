@@ -20,7 +20,7 @@ const extensionName = "ragflow-lore";
 // 1. Default Settings
 const defaultSettings = {
     enabled: true,
-    baseUrl: 'localhost',
+    baseUrl: 'https://rag.latour.live',
     apiKey: '',
     datasetId: '',
     similarityThreshold: 0.1,
@@ -36,12 +36,19 @@ const defaultSettings = {
 // We track the promise primarily for debugging, but we act on resolution immediately.
 let loreFetchPromise = null;
 
+// Helper: Timestamped Logger
+function log(msg, ...args) {
+    const time = new Date().toISOString().split('T')[1].slice(0, -1);
+    console.log(`[RAGFlow ${time}] ${msg}`, ...args);
+}
+
 // 2. Core Logic (RAGFlow Interaction)
 async function fetchRagflowContext(query, overrides = {}) {
     const settings = extension_settings[extensionName];
     
     // Validation
     if (!settings.apiKey || !settings.datasetId) {
+        log("❌ Missing API Key or Dataset ID.");
         return null;
     }
 
@@ -67,9 +74,12 @@ async function fetchRagflowContext(query, overrides = {}) {
         if (!isNaN(rid)) payload.rerank_id = rid;
     }
 
-    console.debug(`[RAGFlow] Fetching context for: "${query.substring(0, 50)}..."`);
+    log(`🚀 Sending Fetch Request to ${url}`);
+    log(`   Query: "${query.substring(0, 50)}..."`);
+    log(`   Payload:`, payload);
 
     try {
+        const startTime = Date.now();
         const response = await fetch(url, {
             method: 'POST',
             headers: {
@@ -79,12 +89,16 @@ async function fetchRagflowContext(query, overrides = {}) {
             body: JSON.stringify(payload)
         });
 
+        const duration = Date.now() - startTime;
+        log(`📡 Response received in ${duration}ms. Status: ${response.status}`);
+
         if (!response.ok) {
             const errText = await response.text();
             throw new Error(`${response.status} ${response.statusText} - ${errText}`);
         }
         
         const data = await response.json();
+        log(`📦 Raw JSON Response:`, data);
         
         let chunks = [];
         let rawItems = [];
@@ -100,17 +114,17 @@ async function fetchRagflowContext(query, overrides = {}) {
             chunks = rawItems.map((item) => {
                 return item.content_with_weight || item.content || item.text || "";
             });
-            console.log(`[RAGFlow] Received ${chunks.length} chunks.`);
+            log(`✅ Processed ${chunks.length} valid chunks.`);
         } else {
-            console.debug(`[RAGFlow] Query returned 0 chunks (Threshold: ${threshold}).`);
+            log(`⚠️ Query returned 0 chunks (Threshold: ${threshold}).`);
         }
 
         if (chunks.length === 0) return null;
         return chunks.join('\n...\n');
 
     } catch (error) {
-        console.error('[RAGFlow] Fetch Error:', error);
-        // Optional: toastr.error(`RAGFlow Error: ${error.message}`);
+        log(`⛔ Fetch Error:`, error);
+        toastr.error(`RAGFlow Error: ${error.message}`);
         return null;
     }
 }
@@ -123,11 +137,19 @@ function updateInjectedPrompt(content = '') {
     const settings = extension_settings[extensionName];
     
     // If disabled or empty content, clear the prompt slot
-    if (!settings.enabled || !content) {
+    if (!settings.enabled) {
+        log("Extension disabled. Clearing prompt slot.");
+        setExtensionPrompt(extensionName, extension_prompt_types.IN_CHAT, '', extension_prompt_roles.SYSTEM);
+        return;
+    }
+    
+    if (!content) {
+        log("No content to inject. Clearing prompt slot.");
         setExtensionPrompt(extensionName, extension_prompt_types.IN_CHAT, '', extension_prompt_roles.SYSTEM);
         return;
     }
 
+    log(`💉 Injecting content (${content.length} chars) into prompt slot.`);
     const fullInjection = `${settings.injectPrefix}${content}${settings.injectSuffix}`;
     
     // Inject into the IN_CHAT depth (standard depth for context injection)
@@ -138,7 +160,6 @@ function updateInjectedPrompt(content = '') {
         fullInjection, 
         extension_prompt_roles.SYSTEM
     );
-    console.debug("[RAGFlow] Prompt slot updated with new context.");
 }
 
 // 3. Settings & UI Management
@@ -264,6 +285,7 @@ jQuery(async () => {
     $("#ragflow_test_btn").on("click", async function(e) {
         e.preventDefault();
         toastr.info("Sending test query...", "RAGFlow");
+        log("Testing connection with manual query...");
         const result = await fetchRagflowContext("test connection check", { similarity_threshold: 0.01 });
         if (result) {
             toastr.success("Connection Successful!", "RAGFlow");
@@ -284,24 +306,30 @@ jQuery(async () => {
      * We start the fetch here to race against the prompt generation.
      */
     eventSource.on(event_types.chat_input_handling, async (data) => {
+        log(`🔔 Event: chat_input_handling triggered.`);
         const settings = extension_settings[extensionName];
-        if (!settings?.enabled) return;
+        if (!settings?.enabled) {
+            log("Extension disabled. Skipping.");
+            return;
+        }
 
         const userQuery = data.text;
         
         // Basic filter for empty or very short queries
         if (!userQuery || userQuery.trim().length < 2) {
-            updateInjectedPrompt(''); // Clear previous context
+            log("Query too short. Clearing previous injection.");
+            updateInjectedPrompt(''); 
             loreFetchPromise = null;
             return;
         }
 
-        console.debug('[RAGFlow] User Input detected. Starting background fetch...');
+        log(`▶ Starting background fetch for: "${userQuery}"`);
+        toastr.info("Fetching Lore...", "RAGFlow", { timeOut: 1500 });
         
         // Start the fetch and immediately attach the handler to update the prompt when done.
         // We do NOT await here, or we would block the UI.
         loreFetchPromise = fetchRagflowContext(userQuery).then(result => {
-            console.debug(`[RAGFlow] Fetch complete. Result found: ${!!result}`);
+            log(`🏁 Fetch complete in background.`);
             updateInjectedPrompt(result);
             return result;
         });
@@ -313,11 +341,15 @@ jQuery(async () => {
      * We need to fetch based on the LAST message in chat.
      */
     const onRegenerate = async () => {
+        log(`🔔 Event: Regenerate/Swipe triggered.`);
         const settings = extension_settings[extensionName];
         if (!settings?.enabled) return;
 
         // Get the last user message from chat history
-        if (!chat || chat.length === 0) return;
+        if (!chat || chat.length === 0) {
+            log("Chat history empty. Skipping.");
+            return;
+        }
         
         // Find last user message
         let lastUserMes = null;
@@ -329,8 +361,10 @@ jQuery(async () => {
         }
 
         if (lastUserMes) {
-            console.debug('[RAGFlow] Regeneration detected. Refetching context...');
+            log(`▶ Refetching context for last user message: "${lastUserMes}"`);
+            toastr.info("Refetching Lore...", "RAGFlow", { timeOut: 1500 });
             loreFetchPromise = fetchRagflowContext(lastUserMes).then(result => {
+                log(`🏁 Fetch complete (regen).`);
                 updateInjectedPrompt(result);
                 return result;
             });
@@ -345,6 +379,7 @@ jQuery(async () => {
 
     // Reset prompt on chat change to prevent context bleeding
     eventSource.on(event_types.CHAT_CHANGED, () => {
+        log(`🔔 Chat changed. Clearing context.`);
         updateInjectedPrompt('');
         loreFetchPromise = null;
     });
