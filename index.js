@@ -59,32 +59,34 @@ async function fetchRagflowContext(query) {
 }
 
 // 3. Event Listeners
-eventSource.on(event_types.chat_input_handling, async (data) => {
-    const context = getContext();
-    const settings = context.extension_settings[extensionName];
-    if (!settings?.enabled) return;
-    
-    pendingLore = "";
-    const userQuery = data.text;
-    if (!userQuery || userQuery.trim().length < 5) return;
+function setupEventListeners() {
+    eventSource.on(event_types.chat_input_handling, async (data) => {
+        const context = getContext();
+        const settings = context.extension_settings[extensionName];
+        if (!settings?.enabled) return;
+        
+        pendingLore = "";
+        const userQuery = data.text;
+        if (!userQuery || userQuery.trim().length < 5) return;
 
-    const result = await fetchRagflowContext(userQuery);
-    if (result) {
-        pendingLore = `${settings.injectPrefix}${result}${settings.injectSuffix}`;
-        console.log('[RAGFlow] Context ready for injection.');
-    }
-});
-
-eventSource.on(event_types.chat_completion_prompt_ready, (data) => {
-    if (pendingLore) {
-        if (data.system_prompt) {
-            data.system_prompt += pendingLore;
-            console.log("[RAGFlow] Injected into System Prompt.");
-        } else {
-           console.log("[RAGFlow] Could not find system_prompt to inject.");
+        const result = await fetchRagflowContext(userQuery);
+        if (result) {
+            pendingLore = `${settings.injectPrefix}${result}${settings.injectSuffix}`;
+            console.log('[RAGFlow] Context ready for injection.');
         }
-    }
-});
+    });
+
+    eventSource.on(event_types.chat_completion_prompt_ready, (data) => {
+        if (pendingLore) {
+            if (data.system_prompt) {
+                data.system_prompt += pendingLore;
+                console.log("[RAGFlow] Injected into System Prompt.");
+            } else {
+               console.log("[RAGFlow] Could not find system_prompt to inject.");
+            }
+        }
+    });
+}
 
 // 4. Build Settings UI
 function buildSettingsMenu() {
@@ -125,24 +127,27 @@ function buildSettingsMenu() {
 }
 
 // 5. Registration
-const context = getContext();
+(function registerExtension() {
+    const context = getContext();
 
-// Ensure settings object is initialized
-if (!context.extension_settings[extensionName]) {
-    context.extension_settings[extensionName] = { ...defaultSettings };
-}
+    // Ensure settings object is initialized
+    if (!context.extension_settings[extensionName]) {
+        context.extension_settings[extensionName] = { ...defaultSettings };
+    }
 
-// Standard Registration
-context.registerExtension({
-    name: "RAGFlow Lore Injector",
-    id: extensionName,
-    init: () => {
-        console.log("[RAGFlow] Extension Loaded.");
-    },
-    settings: buildSettingsMenu 
-});
+    // Standard Registration
+    context.registerExtension({
+        name: "RAGFlow Lore Injector",
+        id: extensionName,
+        init: () => {
+            console.log("[RAGFlow] Extension Loaded.");
+            setupEventListeners();
+        },
+        settings: buildSettingsMenu 
+    });
 
-// Explicitly register settings to force the gear icon to appear
-if (context.registerExtensionSettings) {
-    context.registerExtensionSettings(extensionName, buildSettingsMenu);
-}
+    // Explicitly register settings to force the gear icon to appear
+    if (context.registerExtensionSettings) {
+        context.registerExtensionSettings(extensionName, buildSettingsMenu);
+    }
+})();
