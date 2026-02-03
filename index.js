@@ -417,7 +417,7 @@ jQuery(async () => {
         // 6. PROMPT READY (Final Safety Net)
         const promptReadyEvent = event_types && event_types.CHAT_COMPLETION_PROMPT_READY ? event_types.CHAT_COMPLETION_PROMPT_READY : 'chat_completion_prompt_ready';
         eventSource.on(promptReadyEvent, async (data) => {
-            log("⏳ Prompt Ready check...");
+            log("⏳ Prompt Ready check... Data keys: " + (data ? Object.keys(data).join(',') : 'NULL'));
             
             let contentToInject = null;
 
@@ -426,20 +426,46 @@ jQuery(async () => {
                 log("   Waiting for pending RAG fetch...");
                 try {
                     contentToInject = await loreFetchPromise;
+                    log("   ✅ Fetch finished inside Prompt Ready.");
                 } catch (e) { console.error(e); }
             } 
             
-            if (contentToInject && data && data.system_prompt !== undefined) {
+            if (contentToInject && data) {
                 const settings = extension_settings[extensionName];
                 const marker = settings.injectPrefix.trim();
+                const injection = `${settings.injectPrefix}${contentToInject}${settings.injectSuffix}`;
                 
-                if (!data.system_prompt.includes(marker)) {
-                    log("⚡ Manual Injection (setExtensionPrompt was too late or failed).");
-                    const injection = `${settings.injectPrefix}${contentToInject}${settings.injectSuffix}`;
-                    data.system_prompt += injection;
-                } else {
-                    log("   Context already present in prompt. Good.");
+                let injected = false;
+
+                // Try System Prompt
+                if (data.system_prompt !== undefined) {
+                    if (!data.system_prompt.includes(marker)) {
+                        log("⚡ Manual Injection -> system_prompt");
+                        data.system_prompt += injection;
+                        injected = true;
+                    } else {
+                        log("   Context already present in system_prompt.");
+                        injected = true;
+                    }
+                } 
+                
+                // Try Story String (Fallback)
+                if (!injected && data.story_string !== undefined) {
+                    if (!data.story_string.includes(marker)) {
+                        log("⚡ Manual Injection -> story_string");
+                        data.story_string += injection;
+                        injected = true;
+                    } else {
+                        log("   Context already present in story_string.");
+                        injected = true;
+                    }
                 }
+
+                if (!injected) {
+                    log("   ❌ Could not find valid injection target (system_prompt or story_string).");
+                }
+            } else {
+                if (loreFetchPromise && !contentToInject) log("   Fetch returned null/empty.");
             }
         });
 
