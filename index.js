@@ -1,6 +1,8 @@
 // RAGFlow Lore Injector - Index.js
 // Aligned with StoryMode & SillyTavern Best Practices
 
+console.log("[RAGFlow] 1. Module parsing started..."); // Immediate visual confirmation
+
 import { 
     extension_settings, 
 } from '/scripts/extensions.js';
@@ -33,7 +35,6 @@ const defaultSettings = {
 };
 
 // Global State
-// We track the promise primarily for debugging, but we act on resolution immediately.
 let loreFetchPromise = null;
 
 // Helper: Timestamped Logger
@@ -76,8 +77,7 @@ async function fetchRagflowContext(query, overrides = {}) {
 
     log(`🚀 Sending Fetch Request to ${url}`);
     log(`   Query: "${query.substring(0, 50)}..."`);
-    log(`   Payload:`, payload);
-
+    
     try {
         const startTime = Date.now();
         const response = await fetch(url, {
@@ -98,7 +98,6 @@ async function fetchRagflowContext(query, overrides = {}) {
         }
         
         const data = await response.json();
-        log(`📦 Raw JSON Response:`, data);
         
         let chunks = [];
         let rawItems = [];
@@ -131,14 +130,11 @@ async function fetchRagflowContext(query, overrides = {}) {
 
 /**
  * Updates the SillyTavern extension prompt slot.
- * This updates the global state so it's ready whenever ST generates a prompt.
  */
 function updateInjectedPrompt(content = '') {
     const settings = extension_settings[extensionName];
     
-    // If disabled or empty content, clear the prompt slot
     if (!settings.enabled) {
-        log("Extension disabled. Clearing prompt slot.");
         setExtensionPrompt(extensionName, extension_prompt_types.IN_CHAT, '', extension_prompt_roles.SYSTEM);
         return;
     }
@@ -152,8 +148,6 @@ function updateInjectedPrompt(content = '') {
     log(`💉 Injecting content (${content.length} chars) into prompt slot.`);
     const fullInjection = `${settings.injectPrefix}${content}${settings.injectSuffix}`;
     
-    // Inject into the IN_CHAT depth (standard depth for context injection)
-    // extension_prompt_roles.SYSTEM ensures it is treated as a system instruction
     setExtensionPrompt(
         extensionName, 
         extension_prompt_types.IN_CHAT, 
@@ -204,185 +198,177 @@ function onSettingChange(event) {
 
 // 4. Initialization
 jQuery(async () => {
-    // Inject Settings UI into the Extensions Panel
-    const settingsHtml = `
-    <div class="ragflow-extension-settings">
-        <div class="inline-drawer">
-            <div class="inline-drawer-toggle inline-drawer-header">
-                <b>RAGFlow Lore Injector</b>
-                <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-            </div>
-            <div class="inline-drawer-content">
-                <div class="flex-container">
-                    <label class="checkbox_label">
-                        <input type="checkbox" id="ragflow_enabled" />
-                        Enable RAGFlow Lore
-                    </label>
-                </div>
-                <div class="flex-container">
-                    <label>Base URL</label>
-                    <input type="text" class="text_pole" id="ragflow_baseUrl" placeholder="https://rag.latour.live" />
-                </div>
-                <div class="flex-container">
-                    <label>API Key</label>
-                    <input type="password" class="text_pole" id="ragflow_apiKey" />
-                </div>
-                <div class="flex-container">
-                    <label>Dataset ID</label>
-                    <input type="text" class="text_pole" id="ragflow_datasetId" />
-                </div>
-                
-                <hr />
-                
-                <div class="flex-container">
-                    <label>Max Chunks</label>
-                    <input type="number" class="text_pole" id="ragflow_maxChunks" min="1" max="10" />
-                </div>
-                <div class="flex-container">
-                    <label>Similarity (0.0 - 1.0)</label>
-                    <input type="number" class="text_pole" id="ragflow_similarity" step="0.05" />
-                </div>
-                
-                <div class="flex-container">
-                     <label class="checkbox_label">
-                        <input type="checkbox" id="ragflow_useKg" />
-                        Use Knowledge Graph
-                    </label>
-                </div>
-                 <div class="flex-container">
-                     <label class="checkbox_label">
-                        <input type="checkbox" id="ragflow_keyword" />
-                        Keyword Matching
-                    </label>
-                </div>
-                <div class="flex-container">
-                    <label>Rerank Model ID (Optional)</label>
-                    <input type="number" class="text_pole" id="ragflow_rerankId" placeholder="e.g. 1" />
-                </div>
+    try {
+        console.log("[RAGFlow] 2. jQuery Initialization started...");
 
-                <div class="flex-container" style="margin-top:15px;">
-                    <button id="ragflow_test_btn" class="menu_button">Test Connection</button>
+        // Inject Settings UI
+        const settingsHtml = `
+        <div class="ragflow-extension-settings">
+            <div class="inline-drawer">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <b>RAGFlow Lore Injector</b>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                </div>
+                <div class="inline-drawer-content">
+                    <div class="flex-container">
+                        <label class="checkbox_label">
+                            <input type="checkbox" id="ragflow_enabled" />
+                            Enable RAGFlow Lore
+                        </label>
+                    </div>
+                    <div class="flex-container">
+                        <label>Base URL</label>
+                        <input type="text" class="text_pole" id="ragflow_baseUrl" placeholder="https://rag.latour.live" />
+                    </div>
+                    <div class="flex-container">
+                        <label>API Key</label>
+                        <input type="password" class="text_pole" id="ragflow_apiKey" />
+                    </div>
+                    <div class="flex-container">
+                        <label>Dataset ID</label>
+                        <input type="text" class="text_pole" id="ragflow_datasetId" />
+                    </div>
+                    
+                    <hr />
+                    
+                    <div class="flex-container">
+                        <label>Max Chunks</label>
+                        <input type="number" class="text_pole" id="ragflow_maxChunks" min="1" max="10" />
+                    </div>
+                    <div class="flex-container">
+                        <label>Similarity (0.0 - 1.0)</label>
+                        <input type="number" class="text_pole" id="ragflow_similarity" step="0.05" />
+                    </div>
+                    
+                    <div class="flex-container">
+                        <label class="checkbox_label">
+                            <input type="checkbox" id="ragflow_useKg" />
+                            Use Knowledge Graph
+                        </label>
+                    </div>
+                    <div class="flex-container">
+                        <label class="checkbox_label">
+                            <input type="checkbox" id="ragflow_keyword" />
+                            Keyword Matching
+                        </label>
+                    </div>
+                    <div class="flex-container">
+                        <label>Rerank Model ID (Optional)</label>
+                        <input type="number" class="text_pole" id="ragflow_rerankId" placeholder="e.g. 1" />
+                    </div>
+
+                    <div class="flex-container" style="margin-top:15px;">
+                        <button id="ragflow_test_btn" class="menu_button">Test Connection</button>
+                    </div>
                 </div>
             </div>
         </div>
-    </div>
-    `;
+        `;
 
-    $("#extensions_settings").append(settingsHtml);
-
-    // Bind Event Listeners for Settings
-    $("#ragflow_enabled").on("change", onSettingChange);
-    $("#ragflow_baseUrl").on("input", onSettingChange);
-    $("#ragflow_apiKey").on("input", onSettingChange);
-    $("#ragflow_datasetId").on("input", onSettingChange);
-    $("#ragflow_maxChunks").on("input", onSettingChange);
-    $("#ragflow_similarity").on("input", onSettingChange);
-    $("#ragflow_useKg").on("change", onSettingChange);
-    $("#ragflow_keyword").on("change", onSettingChange);
-    $("#ragflow_rerankId").on("input", onSettingChange);
-
-    // Test Button Logic
-    $("#ragflow_test_btn").on("click", async function(e) {
-        e.preventDefault();
-        toastr.info("Sending test query...", "RAGFlow");
-        log("Testing connection with manual query...");
-        const result = await fetchRagflowContext("test connection check", { similarity_threshold: 0.01 });
-        if (result) {
-            toastr.success("Connection Successful!", "RAGFlow");
-            alert("RAGFlow Response:\n----------------\n" + result);
+        if ($("#extensions_settings").length === 0) {
+            console.error("[RAGFlow] #extensions_settings container not found!");
         } else {
-            toastr.warning("Connection technically worked but returned no results (or check console for errors).", "RAGFlow");
-        }
-    });
-
-    // Load initial settings
-    loadSettings();
-
-    // --- MAIN EVENT LOOP ---
-
-    /**
-     * TRIGGER 1: chat_input_handling
-     * Fired when user presses Enter/Send. This is the earliest possible hook.
-     * We start the fetch here to race against the prompt generation.
-     */
-    eventSource.on(event_types.chat_input_handling, async (data) => {
-        log(`🔔 Event: chat_input_handling triggered.`);
-        const settings = extension_settings[extensionName];
-        if (!settings?.enabled) {
-            log("Extension disabled. Skipping.");
-            return;
+            $("#extensions_settings").append(settingsHtml);
         }
 
-        const userQuery = data.text;
-        
-        // Basic filter for empty or very short queries
-        if (!userQuery || userQuery.trim().length < 2) {
-            log("Query too short. Clearing previous injection.");
-            updateInjectedPrompt(''); 
-            loreFetchPromise = null;
-            return;
-        }
+        // Bind Event Listeners
+        $("#ragflow_enabled").on("change", onSettingChange);
+        $("#ragflow_baseUrl").on("input", onSettingChange);
+        $("#ragflow_apiKey").on("input", onSettingChange);
+        $("#ragflow_datasetId").on("input", onSettingChange);
+        $("#ragflow_maxChunks").on("input", onSettingChange);
+        $("#ragflow_similarity").on("input", onSettingChange);
+        $("#ragflow_useKg").on("change", onSettingChange);
+        $("#ragflow_keyword").on("change", onSettingChange);
+        $("#ragflow_rerankId").on("input", onSettingChange);
 
-        log(`▶ Starting background fetch for: "${userQuery}"`);
-        toastr.info("Fetching Lore...", "RAGFlow", { timeOut: 1500 });
-        
-        // Start the fetch and immediately attach the handler to update the prompt when done.
-        // We do NOT await here, or we would block the UI.
-        loreFetchPromise = fetchRagflowContext(userQuery).then(result => {
-            log(`🏁 Fetch complete in background.`);
-            updateInjectedPrompt(result);
-            return result;
-        });
-    });
-
-    /**
-     * TRIGGER 2: MESSAGE_SWIPED / MESSAGE_REGENERATED
-     * If the user swipes, the previous 'input' event won't fire. 
-     * We need to fetch based on the LAST message in chat.
-     */
-    const onRegenerate = async () => {
-        log(`🔔 Event: Regenerate/Swipe triggered.`);
-        const settings = extension_settings[extensionName];
-        if (!settings?.enabled) return;
-
-        // Get the last user message from chat history
-        if (!chat || chat.length === 0) {
-            log("Chat history empty. Skipping.");
-            return;
-        }
-        
-        // Find last user message
-        let lastUserMes = null;
-        for (let i = chat.length - 1; i >= 0; i--) {
-            if (!chat[i].is_system && chat[i].is_user) {
-                lastUserMes = chat[i].mes;
-                break;
+        // Test Button
+        $("#ragflow_test_btn").on("click", async function(e) {
+            e.preventDefault();
+            toastr.info("Sending test query...", "RAGFlow");
+            log("Testing connection...");
+            const result = await fetchRagflowContext("test connection check", { similarity_threshold: 0.01 });
+            if (result) {
+                toastr.success("Connection Successful!", "RAGFlow");
+                alert("RAGFlow Response:\n----------------\n" + result);
+            } else {
+                toastr.warning("Connection returned no results.", "RAGFlow");
             }
-        }
+        });
 
-        if (lastUserMes) {
-            log(`▶ Refetching context for last user message: "${lastUserMes}"`);
-            toastr.info("Refetching Lore...", "RAGFlow", { timeOut: 1500 });
-            loreFetchPromise = fetchRagflowContext(lastUserMes).then(result => {
-                log(`🏁 Fetch complete (regen).`);
+        // Load Settings
+        loadSettings();
+
+        // --- MAIN EVENT LOOP ---
+
+        // SAFE EVENT BINDING: Use string literals to prevent undefined crashes
+        // We listen to 'chat_input_handling' which fires when user submits text
+        const inputEvent = event_types && event_types.chat_input_handling ? event_types.chat_input_handling : 'chat_input_handling';
+        
+        eventSource.on(inputEvent, async (data) => {
+            log(`🔔 Event: chat_input_handling triggered.`);
+            const settings = extension_settings[extensionName];
+            if (!settings?.enabled) return;
+
+            const userQuery = data.text;
+            if (!userQuery || userQuery.trim().length < 2) {
+                updateInjectedPrompt(''); 
+                loreFetchPromise = null;
+                return;
+            }
+
+            log(`▶ Starting background fetch for: "${userQuery}"`);
+            toastr.info("Fetching Lore...", "RAGFlow", { timeOut: 1500 });
+            
+            loreFetchPromise = fetchRagflowContext(userQuery).then(result => {
+                log(`🏁 Fetch complete.`);
                 updateInjectedPrompt(result);
                 return result;
             });
-        }
-    };
+        });
 
-    eventSource.on(event_types.MESSAGE_SWIPED, onRegenerate);
-    // event_types.MESSAGE_REGENERATED might not exist in all ST versions, usually handled by SWIPED or internal logic
-    if (event_types.MESSAGE_REGENERATED) {
-        eventSource.on(event_types.MESSAGE_REGENERATED, onRegenerate);
+        // Regenerate/Swipe Handling
+        const onRegenerate = async () => {
+            log(`🔔 Event: Regenerate/Swipe triggered.`);
+            const settings = extension_settings[extensionName];
+            if (!settings?.enabled) return;
+
+            if (!chat || chat.length === 0) return;
+            
+            // Find last user message
+            let lastUserMes = null;
+            for (let i = chat.length - 1; i >= 0; i--) {
+                if (!chat[i].is_system && chat[i].is_user) {
+                    lastUserMes = chat[i].mes;
+                    break;
+                }
+            }
+
+            if (lastUserMes) {
+                log(`▶ Refetching for: "${lastUserMes}"`);
+                toastr.info("Refetching Lore...", "RAGFlow", { timeOut: 1500 });
+                loreFetchPromise = fetchRagflowContext(lastUserMes).then(result => {
+                    updateInjectedPrompt(result);
+                    return result;
+                });
+            }
+        };
+
+        const swipeEvent = event_types && event_types.MESSAGE_SWIPED ? event_types.MESSAGE_SWIPED : 'MESSAGE_SWIPED';
+        eventSource.on(swipeEvent, onRegenerate);
+
+        // Reset on Chat Change
+        const changeEvent = event_types && event_types.CHAT_CHANGED ? event_types.CHAT_CHANGED : 'chat_id_changed';
+        eventSource.on(changeEvent, () => {
+            log(`🔔 Chat changed. Clearing context.`);
+            updateInjectedPrompt('');
+            loreFetchPromise = null;
+        });
+
+        console.log("[RAGFlow] 3. Lore Injector Aligned & Loaded Successfully.");
+    
+    } catch (e) {
+        console.error("[RAGFlow] ❌ CRITICAL INITIALIZATION ERROR:", e);
+        toastr.error("RAGFlow Extension failed to load. Check console.", "Extension Error");
     }
-
-    // Reset prompt on chat change to prevent context bleeding
-    eventSource.on(event_types.CHAT_CHANGED, () => {
-        log(`🔔 Chat changed. Clearing context.`);
-        updateInjectedPrompt('');
-        loreFetchPromise = null;
-    });
-
-    console.log("[RAGFlow] Lore Injector Aligned & Loaded.");
 });
