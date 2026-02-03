@@ -37,7 +37,7 @@ const defaultSettings = {
 
 // Global State
 let loreFetchPromise = null;
-let lastFetchedQuery = ""; // Deduplication check
+let lastFetchedQuery = ""; 
 
 // Helper: Timestamped Logger
 function log(msg, ...args) {
@@ -317,156 +317,66 @@ jQuery(async () => {
         // Load Settings
         loadSettings();
 
-        // --- HELPER ---
-        const getLastUserMessage = () => {
-            if (!chat || chat.length === 0) return null;
-            for (let i = chat.length - 1; i >= 0; i--) {
-                if (!chat[i].is_system && chat[i].is_user) {
-                    return chat[i].mes;
-                }
-            }
-            return null;
-        };
+        // ---------------------------------------------------------------------
+        // FEATURE: Manual Trigger via Slash Command & Button
+        // ---------------------------------------------------------------------
 
-        // --- MAIN LOGIC ---
-
-        const handleTrigger = async (eventName, eventData) => {
-            const settings = extension_settings[extensionName];
-            if (!settings?.enabled) return;
-
-            // 1. Determine Query
-            let userQuery = "";
-
-            if (eventName === 'chat_input_handling' && eventData && eventData.text) {
-                userQuery = eventData.text;
-            } 
-            else {
-                userQuery = getLastUserMessage();
-            }
-
-            if (!userQuery || userQuery.trim().length < 2) return;
-
-            // 2. Dedup Check
-            if (userQuery === lastFetchedQuery) {
-                // log(`⏭️ Skipping duplicate fetch for: "${userQuery.substring(0, 20)}..."`);
+        const performManualFetch = async (sourceQuery) => {
+            if (!sourceQuery || sourceQuery.trim().length === 0) {
+                toastr.warning("Please type something in the chat input first.", "RAGFlow");
                 return;
             }
-
-            // 3. Execute Fetch
-            log(`▶ Triggered by '${eventName}'. Fetching: "${userQuery.substring(0, 30)}..."`);
-            toastr.info("Fetching Lore...", "RAGFlow", { timeOut: 1000 });
             
-            // Set dedup BEFORE fetch to prevent concurrent triggers
-            lastFetchedQuery = userQuery;
+            toastr.info(`Fetching Lore for: "${sourceQuery.substring(0,25)}..."`, "RAGFlow");
+            const result = await fetchRagflowContext(sourceQuery);
             
-            loreFetchPromise = fetchRagflowContext(userQuery).then(result => {
-                log(`🏁 Fetch complete.`);
-                
-                // CRITICAL FIX: If fetch failed (null result), clear dedup so user can retry/regenerate
-                if (result === null) {
-                    log("   Fetch failed/empty. Clearing dedup to allow retry.");
-                    lastFetchedQuery = "";
-                }
-                
+            if (result) {
                 updateInjectedPrompt(result);
-                return result;
-            });
+                toastr.success("Lore Context Injected! Ready to Send.", "RAGFlow");
+            } else {
+                toastr.error("Fetch returned no relevant lore.", "RAGFlow");
+            }
         };
 
-        // --- BIND TRIGGERS ---
+        // 1. Register Slash Command (/rag)
+        if (window.registerSlashCommand) {
+            window.registerSlashCommand("rag", async (args, value) => {
+                const query = value || $("#send_textarea").val(); // Get argument OR chat input
+                await performManualFetch(query);
+            }, [], "Manually fetch RAG lore based on input text", true, true);
+        }
 
-        // 1. Chat Input
-        eventSource.on('chat_input_handling', (data) => handleTrigger('chat_input_handling', data));
-
-        // 2. User Message Rendered
-        eventSource.on('user_message_rendered', (id) => handleTrigger('user_message_rendered', null));
-        
-        // 3. Generation Started (With Dry Run Protection)
-        eventSource.on('generation_started', (type, buttons, dryRun) => {
-            if (dryRun) {
-                log("Skipping generation_started due to dryRun.");
-                return;
+        // 2. Inject Manual Button into Chat Bar
+        const btnId = "ragflow_input_btn";
+        if ($(`#${btnId}`).length === 0) {
+            const btnHtml = `
+                <div id="${btnId}" class="mes_text_button fa-solid fa-book-journal-whills" 
+                     title="Grab RAG Lore (Fetch & Inject)" 
+                     style="margin-right: 10px; cursor: pointer; opacity: 0.7; display: flex; align-items: center;">
+                </div>
+            `;
+            
+            // Try to append before the send button row, or inside input controls
+            const container = $("#chat_input_buttons");
+            if (container.length > 0) {
+                container.prepend(btnHtml);
+                
+                $(`#${btnId}`).on("click", async (e) => {
+                    e.preventDefault();
+                    // Add visual feedback
+                    $(`#${btnId}`).css("opacity", "1.0").addClass("fa-spin");
+                    const query = $("#send_textarea").val();
+                    await performManualFetch(query);
+                    $(`#${btnId}`).css("opacity", "0.7").removeClass("fa-spin");
+                });
+                
+                log("✅ Added Manual 'Grab RAG Lore' button to chat bar.");
             }
-            handleTrigger('generation_started', null);
-        });
+        }
 
-        // 4. Swipe / Regenerate
-        eventSource.on('MESSAGE_SWIPED', () => {
-             lastFetchedQuery = ""; 
-             handleTrigger('MESSAGE_SWIPED', null);
-        });
-
-        // 5. Chat Changed
-        eventSource.on('chat_id_changed', () => {
-            log(`🔔 Chat changed. Resetting state.`);
+        // Reset prompt on chat change
+        eventSource.on(event_types.CHAT_CHANGED, () => {
             updateInjectedPrompt('');
-            loreFetchPromise = null;
-            
-            // Wait for chat to load into DOM/Memory before setting dedup
-            setTimeout(() => {
-                const lastMsg = getLastUserMessage();
-                if (lastMsg) {
-                    lastFetchedQuery = lastMsg;
-                    log(`   Initialized history tracker to avoid auto-fetch (Last: "${lastMsg.substring(0,20)}...")`);
-                } else {
-                    lastFetchedQuery = "";
-                }
-            }, 500); // 500ms delay to let ST load chat
-        });
-
-        // 6. PROMPT READY (Final Safety Net)
-        const promptReadyEvent = event_types && event_types.CHAT_COMPLETION_PROMPT_READY ? event_types.CHAT_COMPLETION_PROMPT_READY : 'chat_completion_prompt_ready';
-        eventSource.on(promptReadyEvent, async (data) => {
-            log("⏳ Prompt Ready check... Data keys: " + (data ? Object.keys(data).join(',') : 'NULL'));
-            
-            let contentToInject = null;
-
-            // Scenario A: Promise is pending. Wait for it.
-            if (loreFetchPromise) {
-                log("   Waiting for pending RAG fetch...");
-                try {
-                    contentToInject = await loreFetchPromise;
-                    log("   ✅ Fetch finished inside Prompt Ready.");
-                } catch (e) { console.error(e); }
-            } 
-            
-            if (contentToInject && data) {
-                const settings = extension_settings[extensionName];
-                const marker = settings.injectPrefix.trim();
-                const injection = `${settings.injectPrefix}${contentToInject}${settings.injectSuffix}`;
-                
-                let injected = false;
-
-                // Try System Prompt
-                if (data.system_prompt !== undefined) {
-                    if (!data.system_prompt.includes(marker)) {
-                        log("⚡ Manual Injection -> system_prompt");
-                        data.system_prompt += injection;
-                        injected = true;
-                    } else {
-                        log("   Context already present in system_prompt.");
-                        injected = true;
-                    }
-                } 
-                
-                // Try Story String (Fallback)
-                if (!injected && data.story_string !== undefined) {
-                    if (!data.story_string.includes(marker)) {
-                        log("⚡ Manual Injection -> story_string");
-                        data.story_string += injection;
-                        injected = true;
-                    } else {
-                        log("   Context already present in story_string.");
-                        injected = true;
-                    }
-                }
-
-                if (!injected) {
-                    log("   ❌ Could not find valid injection target (system_prompt or story_string).");
-                }
-            } else {
-                if (loreFetchPromise && !contentToInject) log("   Fetch returned null/empty.");
-            }
         });
 
         console.log("[RAGFlow] 3. Lore Injector Aligned & Loaded Successfully.");
