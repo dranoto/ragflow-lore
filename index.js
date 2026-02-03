@@ -78,7 +78,7 @@ async function fetchRagflowContext(query, overrides = {}) {
         if (!isNaN(rid)) payload.rerank_id = rid;
     }
 
-    console.log(`[RAGFlow] Sending Query: "${query}" (Threshold: ${threshold})`);
+    console.log(`[RAGFlow DEBUG] Sending Query to ${url}: "${query}" (Threshold: ${threshold})`);
 
     try {
         const response = await fetch(url, {
@@ -107,23 +107,23 @@ async function fetchRagflowContext(query, overrides = {}) {
         }
 
         if (rawItems.length > 0) {
-            console.log(`[RAGFlow] Received ${rawItems.length} potential chunks.`);
+            console.log(`[RAGFlow DEBUG] Received ${rawItems.length} potential chunks.`);
             chunks = rawItems.map((item, index) => {
                 const content = item.content_with_weight || item.content || item.text || "";
                 const score = item.similarity || item.vector_similarity || item.score || 0;
                 // Log score to help user debug thresholds
-                console.log(`[RAGFlow] Chunk #${index + 1} Score: ${score.toFixed(4)}`);
+                console.log(`[RAGFlow DEBUG] Chunk #${index + 1} Score: ${score.toFixed(4)}`);
                 return content;
             });
         } else {
-            console.log(`[RAGFlow] Query returned 0 chunks (Threshold was ${threshold}).`);
+            console.log(`[RAGFlow DEBUG] Query returned 0 chunks (Threshold was ${threshold}).`);
         }
 
         if (chunks.length === 0) return null;
         return chunks.join('\n...\n');
 
     } catch (error) {
-        console.error('[RAGFlow] Fetch Error:', error);
+        console.error('[RAGFlow DEBUG] Fetch Error:', error);
         toastr.error(`RAGFlow Error: ${error.message}`);
         return null;
     }
@@ -269,54 +269,72 @@ jQuery(async () => {
         const settings = extension_settings[extensionName];
         if (!settings?.enabled) return;
         
+        console.log('[RAGFlow DEBUG] Event: chat_input_handling fired.');
+
         const userQuery = data.text;
         if (!userQuery || userQuery.trim().length < 5) {
+            console.log('[RAGFlow DEBUG] Query too short, clearing promise.');
             loreFetchPromise = null;
             return;
         }
 
-        console.log('[RAGFlow] User Input detected. Starting background fetch...');
+        console.log('[RAGFlow DEBUG] User Input detected. Starting background fetch promise...');
         toastr.info("Searching RAGFlow...", "Lore Injector", { timeOut: 1500 });
         
         // CRITICAL: We save the PROMISE here, so we can await it later.
-        // We do not await it here, so UI stays responsive.
-        loreFetchPromise = fetchRagflowContext(userQuery).catch(err => {
-            console.error("RAGFlow background fetch failed", err);
+        loreFetchPromise = fetchRagflowContext(userQuery).then(res => {
+            console.log(`[RAGFlow DEBUG] Promise Resolved. Result length: ${res ? res.length : 0}`);
+            return res;
+        }).catch(err => {
+            console.error("[RAGFlow DEBUG] Promise Rejected:", err);
             return null;
         });
     });
 
     // EVENT 2: Prompt Ready (Wait for Data & Inject)
     eventSource.on(event_types.chat_completion_prompt_ready, async (data) => {
+        console.log('[RAGFlow DEBUG] Event: chat_completion_prompt_ready fired.');
+        
         // If no fetch is pending, do nothing
-        if (!loreFetchPromise) return;
+        if (!loreFetchPromise) {
+            console.log('[RAGFlow DEBUG] No active RAGFlow promise found. Skipping injection.');
+            return;
+        }
 
-        console.log('[RAGFlow] Prompt Ready. Waiting for RAG fetch to finish...');
+        console.log('[RAGFlow DEBUG] Promise found. Awaiting RAG fetch to finish...');
         
         // CRITICAL: Force SillyTavern generation to PAUSE until RAGFlow replies
         const result = await loreFetchPromise;
         
+        console.log('[RAGFlow DEBUG] Fetch complete. Result:', result ? 'Has Data' : 'Null');
+
         if (result) {
             const settings = extension_settings[extensionName];
             const injection = `${settings.injectPrefix}${result}${settings.injectSuffix}`;
             
             let injected = false;
 
+            console.log('[RAGFlow DEBUG] Attempting injection. Available keys:', Object.keys(data));
+
             if (data.system_prompt !== undefined) {
+                console.log(`[RAGFlow DEBUG] Injecting into system_prompt. Old length: ${data.system_prompt.length}`);
                 data.system_prompt += injection;
                 injected = true;
             } 
             else if (data.story_string !== undefined) {
+                console.log(`[RAGFlow DEBUG] Injecting into story_string. Old length: ${data.story_string.length}`);
                 data.story_string += injection;
                 injected = true;
+            } else {
+                console.warn('[RAGFlow DEBUG] No suitable injection target (system_prompt or story_string) found!');
             }
 
             if (injected) {
                 toastr.success("Context Injected!", "RAGFlow", { timeOut: 2000 });
-                console.log('[RAGFlow] Injection successful.');
+                console.log('[RAGFlow DEBUG] Injection successful.');
             }
         } else {
-            console.log('[RAGFlow] Fetch finished but returned no valid context.');
+            console.log('[RAGFlow DEBUG] Fetch finished but returned no valid context (or error occurred).');
         }
         
         // Cleanup
