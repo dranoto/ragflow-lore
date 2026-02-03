@@ -14,7 +14,6 @@ import {
     setExtensionPrompt,
     extension_prompt_types,
     extension_prompt_roles,
-    registerSlashCommand, // Import directly!
     chat // Import chat directly to access history if needed
 } from '/script.js';
 
@@ -319,7 +318,7 @@ jQuery(async () => {
         loadSettings();
 
         // ---------------------------------------------------------------------
-        // FEATURE: Manual Trigger via Slash Command & Button
+        // FEATURE: Manual Trigger via Button
         // ---------------------------------------------------------------------
 
         const performManualFetch = async (sourceQuery) => {
@@ -338,19 +337,6 @@ jQuery(async () => {
                 toastr.error("Fetch returned no relevant lore.", "RAGFlow");
             }
         };
-
-        // 1. Register Slash Command (/rag)
-        // Use imported function instead of window check
-        if (typeof registerSlashCommand === 'function') {
-            registerSlashCommand("rag", async (args, value) => {
-                // If value is provided (arguments), use that. Otherwise use textarea.
-                const query = value ? value : $("#send_textarea").val(); 
-                await performManualFetch(query);
-            }, [], "Manually fetch RAG lore based on input text", true, true);
-            log("✅ Registered /rag slash command.");
-        } else {
-            console.warn("[RAGFlow] registerSlashCommand not found/imported correctly.");
-        }
 
         // 2. Inject Manual Button into Chat Bar
         // We try multiple selectors to find where to put the button
