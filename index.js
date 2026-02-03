@@ -8,33 +8,22 @@ const defaultSettings = {
     datasetId: '',
     similarityThreshold: 0.5,
     maxChunks: 3,
-    // We inject this into the "System" prompt so the character knows it's knowledge, not dialogue.
     injectPrefix: '\n[Relevant excerpts from the original novel for this scene:\n',
     injectSuffix: '\n]\n'
 };
 
 const extensionName = "ragflow-lore";
-const context = getContext();
-
-// Variable to hold the fetched lore temporarily
 let pendingLore = "";
-
-// Ensure settings exist
-if (!context.extension_settings[extensionName]) {
-    context.extension_settings[extensionName] = { ...defaultSettings };
-}
-
-const getSettings = () => context.extension_settings[extensionName];
 
 // 2. RAGFlow API Interaction
 async function fetchRagflowContext(query) {
-    const settings = getSettings();
+    const context = getContext();
+    const settings = context.extension_settings[extensionName];
+    
     if (!settings.apiKey || !settings.datasetId) return null;
 
     const url = `${settings.baseUrl.replace(/\/$/, '')}/api/v1/datasets/${settings.datasetId}/search`;
     
-    // Clean query: remove "Scrooge" or names to focus on the topic, or keep them for context. 
-    // Keeping user input as-is is usually best.
     try {
         const response = await fetch(url, {
             method: 'POST',
@@ -69,19 +58,16 @@ async function fetchRagflowContext(query) {
     }
 }
 
-// 3. EVENT 1: Fetch Data when you hit Send
-// We use 'chat_input_handling' to perform the fetch asynchronously while the UI processes your message.
+// 3. Event Listeners
 eventSource.on(event_types.chat_input_handling, async (data) => {
-    const settings = getSettings();
+    const context = getContext();
+    const settings = context.extension_settings[extensionName];
     if (!settings.enabled) return;
     
-    // Reset previous lore
     pendingLore = "";
-
     const userQuery = data.text;
     if (!userQuery || userQuery.trim().length < 5) return;
 
-    // Fetch and store in the global variable
     const result = await fetchRagflowContext(userQuery);
     if (result) {
         pendingLore = `${settings.injectPrefix}${result}${settings.injectSuffix}`;
@@ -89,30 +75,21 @@ eventSource.on(event_types.chat_input_handling, async (data) => {
     }
 });
 
-// 4. EVENT 2: Inject into Prompt silently
-// 'chat_completion_prompt_ready' fires right before the request goes to the AI.
-// We append our stored lore to the system prompt or after the chat history.
 eventSource.on(event_types.chat_completion_prompt_ready, (data) => {
     if (pendingLore) {
-        // Option A: Append to System Prompt (Strongest instruction, invisible to user)
-        // Checks if system_prompt exists in the data object (standard in ST)
         if (data.system_prompt) {
             data.system_prompt += pendingLore;
-        } 
-        // Option B: Fallback - Prepend to the last message (User's message) effectively
-        // but this might be visible depending on the backend.
-        // We will stick to modifying the extension_prompt if available, or system_prompt.
-        else {
+            console.log("[RAGFlow] Injected into System Prompt.");
+        } else {
            console.log("[RAGFlow] Could not find system_prompt to inject.");
         }
-        
-        console.log("[RAGFlow] Injected into System Prompt.");
     }
 });
 
-// 5. Build Settings UI (Same as before)
+// 4. Build Settings UI
 function buildSettingsMenu() {
-    const settings = getSettings();
+    const context = getContext();
+    const settings = context.extension_settings[extensionName];
     const container = document.createElement('div');
     container.className = 'ragflow-settings-container';
 
@@ -147,17 +124,27 @@ function buildSettingsMenu() {
     return container;
 }
 
-// 6. Register Extension
-// This part is critical for the extension to appear in the list and load settings.
-context.registerExtension({
-    name: extensionName, 
-    id: extensionName, 
-    init: function() {
-        if (context.registerExtensionSettings) {
-            context.registerExtensionSettings(extensionName, buildSettingsMenu);
-        } else {
-            console.error("[RAGFlow] registerExtensionSettings not available. Update SillyTavern.");
-        }
-        console.log("[RAGFlow] Extension Loaded.");
+// 5. Registration
+jQuery(async () => {
+    const context = getContext();
+
+    // Ensure settings object is initialized
+    if (!context.extension_settings[extensionName]) {
+        context.extension_settings[extensionName] = { ...defaultSettings };
+    }
+
+    // Register with display name and ID
+    context.registerExtension({
+        name: "RAGFlow Lore Injector",
+        id: extensionName,
+        init: () => {
+            console.log("[RAGFlow] Extension Loaded.");
+        },
+        settings: buildSettingsMenu // This links the UI to the extension settings
+    });
+
+    // Support for older ST versions or explicit manual registration
+    if (context.registerExtensionSettings) {
+        context.registerExtensionSettings(extensionName, buildSettingsMenu);
     }
 });
