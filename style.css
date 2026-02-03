@@ -1,0 +1,44 @@
+.ragflow-settings-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 10px;
+    background-color: rgba(0, 0, 0, 0.2);
+    border-radius: 10px;
+    margin-bottom: 15px;
+}
+
+.ragflow-settings-container label {
+    display: flex;
+    flex-direction: column;
+    font-weight: bold;
+    margin-bottom: 5px;
+    font-size: 0.9em;
+}
+
+.ragflow-settings-container input[type="text"],
+.ragflow-settings-container input[type="password"],
+.ragflow-settings-container input[type="number"] {
+    margin-top: 5px;
+    padding: 8px;
+    background-color: rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--smart-theme-border);
+    color: var(--smart-theme-body-color);
+    border-radius: 5px;
+}
+
+.ragflow-settings-container small {
+    opacity: 0.7;
+    font-weight: normal;
+    margin-top: 2px;
+}
+
+.ragflow-status {
+    margin-top: 10px;
+    padding: 5px;
+    font-style: italic;
+    font-size: 0.85em;
+}
+
+.ragflow-status.success { color: #81C784; }
+.ragflow-status.error { color: #E57373; }

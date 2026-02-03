@@ -1,0 +1,8 @@
+{
+    "name": "RAGFlow Lore Injector",
+    "version": "1.0.0",
+    "author": "User",
+    "description": "Queries a RAGFlow dataset for RAPTOR chunks based on user input and injects them as Lore/World Info.",
+    "top_level_index": "index.js",
+    "css": "style.css"
+}
