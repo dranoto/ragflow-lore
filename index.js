@@ -315,7 +315,7 @@ jQuery(async () => {
         loadSettings();
 
         // ---------------------------------------------------------------------
-        // FEATURE: Manual Fetch Logic
+        // FEATURE: Manual Trigger via Button
         // ---------------------------------------------------------------------
 
         const performManualFetch = async (sourceQuery) => {
@@ -335,33 +335,8 @@ jQuery(async () => {
             }
         };
 
-        // 1. SAFE Wand Menu Registration
-        // We check for window.addWandItem which is standard in recent ST versions
-        if (window.addWandItem) {
-            window.addWandItem({
-                id: 'ragflow_fetch',
-                icon: 'fa-solid fa-book-journal-whills',
-                title: 'Grab RAG Lore',
-                callback: async () => {
-                    const query = $("#send_textarea").val();
-                    await performManualFetch(query);
-                }
-            });
-            log("✅ Added 'Grab RAG Lore' to Wand Menu via window.addWandItem");
-        } else {
-            console.warn("[RAGFlow] window.addWandItem not found. Falling back to input button.");
-        }
-
-        // 2. Safe Slash Command Registration
-        if (window.registerSlashCommand) {
-            window.registerSlashCommand("rag", async (args, value) => {
-                const query = value || $("#send_textarea").val();
-                await performManualFetch(query);
-            }, [], "Manually fetch RAG lore based on input text", true, true);
-            log("✅ Registered /rag slash command.");
-        }
-
-        // 3. Fallback: Manual Button in Chat Bar
+        // Inject Manual Button into Chat Bar (Interval Retry Method)
+        // This bypasses the need for specific wand APIs by injecting into the DOM
         const btnId = "ragflow_input_btn";
         
         const injectButton = () => {
@@ -374,11 +349,12 @@ jQuery(async () => {
                 </div>
             `;
             
+            // Priority list of containers to try
             const containers = [
                 "#chat_input_buttons",
                 "#form_chat_buttons",
                 ".chat_input_buttons",
-                "#send_but_container"
+                "#send_but_container", // Fallback for some themes
             ];
 
             let foundContainer = null;
@@ -395,6 +371,7 @@ jQuery(async () => {
                 $(`#${btnId}`).on("click", async (e) => {
                     e.preventDefault();
                     e.stopPropagation();
+                    
                     const btn = $(`#${btnId}`);
                     btn.css("opacity", "1.0").addClass("fa-spin");
                     
@@ -403,16 +380,20 @@ jQuery(async () => {
                     
                     btn.css("opacity", "0.7").removeClass("fa-spin");
                 });
-                log("✅ Added Manual Button to Chat Bar.");
+                
+                log("✅ Added Manual 'Grab RAG Lore' button to chat bar.");
             }
         };
 
-        // Retry DOM injection for 5 seconds to catch slow loads
+        // Try immediately
+        injectButton();
+
+        // Retry a few times in case UI loads slowly (common in ST)
         let retries = 0;
         const retryInterval = setInterval(() => {
             injectButton();
             retries++;
-            if (retries > 5 || $(`#${btnId}`).length > 0) {
+            if (retries > 10 || $(`#${btnId}`).length > 0) {
                 clearInterval(retryInterval);
             }
         }, 1000);
