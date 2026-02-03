@@ -7,9 +7,6 @@ import {
     loadExtensionSettings
 } from "../../../extensions.js";
 
-// NOTE: The example assumes 'scripts/extensions/third-party/extension-name' (Depth 4).
-// If you are in 'scripts/extensions/ragflow-lore' (Depth 3), this import might need to be '../../script.js'.
-// We will stick to the example's depth.
 import { 
     saveSettingsDebounced,
     eventSource,
@@ -24,11 +21,11 @@ const defaultSettings = {
     baseUrl: 'http://localhost:9380',
     apiKey: '',
     datasetId: '',
-    similarityThreshold: 0.5,
+    similarityThreshold: 0.2,
     maxChunks: 3,
-    useKg: false,      // Knowledge Graph
-    keyword: false,    // Keyword Matching
-    rerankId: '',      // Reranker Model ID
+    useKg: false,
+    keyword: false,
+    rerankId: '', // Default to empty (will be parsed to int if set)
     injectPrefix: '\n\n<ragflow_context>\n[Relevant excerpts from the original novel for this scene:\n',
     injectSuffix: '\n]\n</ragflow_context>\n'
 };
@@ -48,24 +45,28 @@ async function fetchRagflowContext(query) {
     const cleanUrl = settings.baseUrl.replace(/\/$/, '');
     const url = `${cleanUrl}/api/v1/retrieval`;
     
-    console.log(`[RAGFlow] Querying: ${url}`);
-
     // Construct Payload
-    // mapping maxChunks -> page_size ensures we strictly limit the output
     const payload = {
         question: query,
         dataset_ids: [settings.datasetId],
         similarity_threshold: parseFloat(settings.similarityThreshold),
         page_size: parseInt(settings.maxChunks),
-        top_k: 1024, // Default high search depth for quality
+        top_k: 1024,
         use_kg: settings.useKg,
         keyword: settings.keyword
     };
 
-    // Only add rerank_id if user provided one
-    if (settings.rerankId && settings.rerankId.trim() !== '') {
-        payload.rerank_id = settings.rerankId.trim();
+    // Parse Rerank ID as Integer (Strict Requirement)
+    if (settings.rerankId && settings.rerankId.toString().trim() !== '') {
+        const rid = parseInt(settings.rerankId, 10);
+        if (!isNaN(rid)) {
+            payload.rerank_id = rid;
+        } else {
+            console.warn("[RAGFlow] Rerank ID provided is not a valid integer. Ignoring.");
+        }
     }
+
+    console.log(`[RAGFlow] POST ${url}`, payload);
 
     try {
         const response = await fetch(url, {
@@ -79,34 +80,49 @@ async function fetchRagflowContext(query) {
 
         if (!response.ok) {
             const errText = await response.text();
-            throw new Error(`${response.status} ${response.statusText} - ${errText}`);
+            console.error('[RAGFlow] Server responded with error:', errText);
+            throw new Error(`${response.status} ${response.statusText}`);
         }
         
         const data = await response.json();
-        console.log('[RAGFlow] Raw Response:', data);
+        console.log('[RAGFlow] Raw Response Data:', data);
         
         let chunks = [];
-        
+        let rawItems = [];
+
+        // Parse: Handle generic vs chunk vs row formats
         if (data.code === 0 && data.data && Array.isArray(data.data.chunks)) {
-             chunks = data.data.chunks.map(c => c.content_with_weight || c.content);
-        } 
-        else if (data.data && Array.isArray(data.data.rows)) {
-            chunks = data.data.rows.map(row => row.content_with_weight || row.content);
-        } else if (Array.isArray(data.chunks)) {
-            chunks = data.chunks.map(c => c.content_with_weight || c.content);
-        } else if (Array.isArray(data.results)) {
-            chunks = data.results.map(r => r.content || r.text);
+             rawItems = data.data.chunks;
+        } else if (data.data && Array.isArray(data.data.rows)) {
+             rawItems = data.data.rows;
+        }
+
+        if (rawItems.length > 0) {
+            console.log(`[RAGFlow] Found ${rawItems.length} items.`);
+            chunks = rawItems.map((item, index) => {
+                // Try to find the content field
+                const content = item.content_with_weight || item.content || item.text || "";
+                const score = item.similarity || item.vector_similarity || item.score || 0;
+                console.log(`[RAGFlow] Chunk #${index + 1} (Score: ${score}):`, content.substring(0, 50) + "...");
+                return content;
+            });
         }
 
         if (chunks.length === 0) {
-            console.log('[RAGFlow] No chunks returned.');
+            console.warn('[RAGFlow] Request succeeded but returned 0 chunks. Check your Threshold setting vs the Score in logs.');
             return null;
         }
         
         return chunks.join('\n...\n');
     } catch (error) {
-        console.error('[RAGFlow] Search failed:', error);
-        toastr.error(`RAGFlow Error: ${error.message}`);
+        console.error('[RAGFlow] Search failed completely:', error);
+        
+        // Specific CORS advice
+        if (error.name === 'TypeError' && error.message === 'Failed to fetch') {
+            toastr.error("Network Error (CORS). Your browser blocked the request. Check console for details.", "RAGFlow");
+        } else {
+            toastr.error(`Error: ${error.message}`, "RAGFlow");
+        }
         return null;
     }
 }
@@ -128,8 +144,6 @@ async function loadSettings() {
     $("#ragflow_datasetId").val(settings.datasetId);
     $("#ragflow_maxChunks").val(settings.maxChunks);
     $("#ragflow_similarity").val(settings.similarityThreshold);
-    
-    // New Fields
     $("#ragflow_useKg").prop("checked", settings.useKg);
     $("#ragflow_keyword").prop("checked", settings.keyword);
     $("#ragflow_rerankId").val(settings.rerankId);
@@ -146,7 +160,6 @@ function onSettingChange(event) {
         case "ragflow_datasetId": settings.datasetId = $(event.target).val(); break;
         case "ragflow_maxChunks": settings.maxChunks = parseInt($(event.target).val()); break;
         case "ragflow_similarity": settings.similarityThreshold = parseFloat($(event.target).val()); break;
-        // New Fields
         case "ragflow_useKg": settings.useKg = !!$(event.target).prop("checked"); break;
         case "ragflow_keyword": settings.keyword = !!$(event.target).prop("checked"); break;
         case "ragflow_rerankId": settings.rerankId = $(event.target).val(); break;
@@ -182,16 +195,17 @@ jQuery(async () => {
                     <label>Dataset ID</label>
                     <input type="text" class="text_pole" id="ragflow_datasetId" />
                 </div>
+                
+                <hr />
+                
                 <div class="flex-container">
                     <label>Max Chunks</label>
                     <input type="number" class="text_pole" id="ragflow_maxChunks" min="1" max="10" />
                 </div>
                 <div class="flex-container">
-                    <label>Similarity</label>
-                    <input type="number" class="text_pole" id="ragflow_similarity" step="0.1" />
+                    <label>Similarity (0.0 - 1.0)</label>
+                    <input type="number" class="text_pole" id="ragflow_similarity" step="0.05" />
                 </div>
-
-                <hr />
                 
                 <div class="flex-container">
                      <label class="checkbox_label">
@@ -206,12 +220,16 @@ jQuery(async () => {
                     </label>
                 </div>
                 <div class="flex-container">
-                    <label>Rerank Model ID (Optional)</label>
-                    <input type="text" class="text_pole" id="ragflow_rerankId" placeholder="e.g. bge-reranker-v2-m3" />
+                    <label>Rerank Model ID (Integer, Optional)</label>
+                    <input type="number" class="text_pole" id="ragflow_rerankId" placeholder="e.g. 1" />
+                </div>
+
+                <div class="flex-container" style="margin-top:15px;">
+                    <button id="ragflow_test_btn" class="menu_button">Test Connection</button>
                 </div>
 
                 <div class="flex-container">
-                    <small><i>Check the browser console (F12) for detailed debug logs.</i></small>
+                    <small><i>Check browser console (F12) for detailed logs.</i></small>
                 </div>
             </div>
         </div>
@@ -226,70 +244,73 @@ jQuery(async () => {
     $("#ragflow_datasetId").on("input", onSettingChange);
     $("#ragflow_maxChunks").on("input", onSettingChange);
     $("#ragflow_similarity").on("input", onSettingChange);
-    // New Bindings
     $("#ragflow_useKg").on("change", onSettingChange);
     $("#ragflow_keyword").on("change", onSettingChange);
     $("#ragflow_rerankId").on("input", onSettingChange);
 
+    // TEST BUTTON LISTENER
+    $("#ragflow_test_btn").on("click", async function(e) {
+        e.preventDefault();
+        toastr.info("Sending test query...", "RAGFlow");
+        console.log("[RAGFlow] Test button clicked.");
+        
+        const result = await fetchRagflowContext("test connection check");
+        
+        if (result) {
+            toastr.success("Connection Successful! Chunks found.", "RAGFlow");
+            alert("RAGFlow Response:\n----------------\n" + result);
+        } else {
+            // Error is handled in fetchRagflowContext via toastr
+            console.log("[RAGFlow] Test failed.");
+        }
+    });
+
     loadSettings();
 
-    // -- DEBUG LOGGING --
-    console.log('[RAGFlow] Event Types Available:', Object.keys(event_types));
-
-    // EVENT 1: Input Handling (The Fetch)
+    // EVENT 1: Input Handling
     eventSource.on(event_types.chat_input_handling, async (data) => {
         const settings = extension_settings[extensionName];
         if (!settings?.enabled) return;
         
-        pendingLore = ""; // Reset previous lore
+        pendingLore = ""; 
         const userQuery = data.text;
         
-        if (!userQuery || userQuery.trim().length < 5) {
-            console.log('[RAGFlow] Query too short, skipping.');
-            return;
-        }
+        if (!userQuery || userQuery.trim().length < 5) return;
 
-        console.log('[RAGFlow] 1. Input detected. Starting fetch for:', userQuery);
-        const startTime = Date.now();
+        // Visual feedback
+        toastr.info("Searching RAGFlow...", "Lore Injector", { timeOut: 1500 });
         
         const result = await fetchRagflowContext(userQuery);
-        
-        const duration = Date.now() - startTime;
-        console.log(`[RAGFlow] 2. Fetch completed in ${duration}ms`);
 
         if (result) {
             pendingLore = `${settings.injectPrefix}${result}${settings.injectSuffix}`;
-            console.log('[RAGFlow] Lore prepared. Length:', pendingLore.length);
-        } else {
-            console.log('[RAGFlow] No lore found.');
+            console.log('[RAGFlow] Lore ready to inject.');
         }
     });
 
-    // EVENT 2: Prompt Injection (The Action)
+    // EVENT 2: Prompt Injection
     eventSource.on(event_types.chat_completion_prompt_ready, (data) => {
-        console.log('[RAGFlow] 3. Prompt Ready Event Triggered.');
-        
-        if (!pendingLore) {
-            console.log('[RAGFlow] pendingLore is empty. Nothing to inject.');
-            return;
-        }
+        if (!pendingLore) return;
 
-        // Try to find the best place to inject
+        let injected = false;
+
         if (data.system_prompt !== undefined) {
-            console.log('[RAGFlow] Injecting into data.system_prompt');
             data.system_prompt += pendingLore;
+            injected = true;
         } 
         else if (data.story_string !== undefined) {
-            // Fallback for some backends
-            console.log('[RAGFlow] system_prompt missing, injecting into story_string');
             data.story_string += pendingLore;
+            injected = true;
         }
         else {
-            console.warn('[RAGFlow] Could not find a field to inject lore into! keys:', Object.keys(data));
+             console.warn('[RAGFlow] Could not find system_prompt or story_string.');
         }
 
-        console.log('[RAGFlow] Injection complete.');
+        if (injected) {
+            toastr.success("Context Injected!", "RAGFlow", { timeOut: 2000 });
+            console.log('[RAGFlow] Injection successful.');
+        }
     });
 
-    console.log("[RAGFlow] Extension loaded successfully.");
+    console.log("[RAGFlow] Extension loaded.");
 });
