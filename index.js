@@ -1,5 +1,5 @@
 // RAGFlow Lore Injector - Index.js
-// Updated to use Prompt Interceptor for robust async injection
+// Updated: Uses chat.splice for direct injection per Interceptor docs
 
 console.log("[RAGFlow] 1. Module parsing started...");
 
@@ -9,10 +9,9 @@ import {
 
 import { 
     saveSettingsDebounced,
-    setExtensionPrompt,
-    extension_prompt_types,
-    extension_prompt_roles,
-    chat // Import chat for UI Test button access only
+    eventSource,
+    event_types,
+    chat // Import chat for UI Test button access
 } from '/script.js';
 
 const extensionName = "ragflow-lore";
@@ -33,7 +32,7 @@ const defaultSettings = {
     injectSuffix: '\n]\n</ragflow_context>\n'
 };
 
-// Global State for Caching
+// Global State
 let lastProcessedQuery = null;
 let cachedContext = null;
 
@@ -141,37 +140,8 @@ async function fetchRagflowContext(query, overrides = {}) {
 }
 
 /**
- * Updates the SillyTavern extension prompt slot.
- */
-function updateInjectedPrompt(content = '') {
-    const settings = extension_settings[extensionName];
-    
-    if (!settings.enabled) {
-        setExtensionPrompt(extensionName, extension_prompt_types.IN_CHAT, '', extension_prompt_roles.SYSTEM);
-        return;
-    }
-    
-    const promptContent = content ? `${settings.injectPrefix}${content}${settings.injectSuffix}` : "";
-    
-    // Inject into the IN_CHAT depth
-    setExtensionPrompt(
-        extensionName, 
-        extension_prompt_types.IN_CHAT, 
-        promptContent, 
-        extension_prompt_roles.SYSTEM
-    );
-    
-    if (content) {
-        log(`💉 Injected context into system prompt (${promptContent.length} chars).`);
-    } else {
-        log(`🧹 Cleared injected context.`);
-    }
-}
-
-/**
  * PROMPT INTERCEPTOR
- * This global function is called by SillyTavern before generation.
- * It allows us to perform async work (like fetching) and block generation until done.
+ * Directly injects a system message into the chat array before generation.
  */
 globalThis.ragflowLoreInterceptor = async function (chatHistory, contextSize, abort, type) {
     const settings = extension_settings[extensionName];
@@ -179,14 +149,16 @@ globalThis.ragflowLoreInterceptor = async function (chatHistory, contextSize, ab
     // 1. Safety Checks
     if (!settings || !settings.enabled) return;
 
-    // 2. Determine Query from the provided chatHistory (more reliable than global chat)
-    // We look for the last message belonging to the user.
+    // 2. Determine Query
     let userQuery = "";
-    
-    // Iterate backwards to find last user message
+    let insertIndex = chatHistory.length; // Default to end
+
+    // Iterate backwards to find last user message to serve as query
+    // And determine where to insert the context (right before it)
     for (let i = chatHistory.length - 1; i >= 0; i--) {
         if (chatHistory[i].is_user) {
             userQuery = chatHistory[i].mes;
+            insertIndex = i; // Insert BEFORE the user message
             break;
         }
     }
@@ -196,26 +168,44 @@ globalThis.ragflowLoreInterceptor = async function (chatHistory, contextSize, ab
         return;
     }
 
-    // 3. Dedup / Cache Check
-    // If the query is exactly the same as the last one we processed, use cached result.
+    // 3. Fetch or Cache
+    let contextContent = null;
+    
     if (userQuery === lastProcessedQuery && cachedContext !== null) {
         log(`♻️ Using cached context for query: "${userQuery.substring(0, 20)}..."`);
-        updateInjectedPrompt(cachedContext);
-        return;
+        contextContent = cachedContext;
+    } else {
+        log(`▶ Interceptor triggered. Fetching for: "${userQuery.substring(0, 30)}..."`);
+        toastr.info("Fetching Lore...", "RAGFlow", { timeOut: 1000 });
+        contextContent = await fetchRagflowContext(userQuery);
+        
+        // Update Cache
+        lastProcessedQuery = userQuery;
+        cachedContext = contextContent;
     }
 
-    // 4. Perform Fetch
-    log(`▶ Interceptor triggered. Fetching for: "${userQuery.substring(0, 30)}..."`);
-    toastr.info("Fetching Lore...", "RAGFlow", { timeOut: 1000 });
-    
-    const result = await fetchRagflowContext(userQuery);
-    
-    // 5. Update Cache & State
-    lastProcessedQuery = userQuery;
-    cachedContext = result;
+    // 4. Inject into Chat Array
+    if (contextContent) {
+        const fullText = `${settings.injectPrefix}${contextContent}${settings.injectSuffix}`;
+        
+        const systemNote = {
+            is_user: false,
+            is_system: true,
+            name: "RAGFlow",
+            send_date: Date.now(),
+            mes: fullText,
+            force_avatar: '',
+            extra: { 
+                type: 'ragflow_injection',
+                created: Date.now()
+            }
+        };
 
-    // 6. Inject (or clear if null)
-    updateInjectedPrompt(result);
+        // Splice into the chat array
+        // This modifies the array used for prompt building directly
+        chatHistory.splice(insertIndex, 0, systemNote);
+        log(`💉 Injected context at index ${insertIndex} (Length: ${fullText.length})`);
+    }
 };
 
 // 3. Settings & UI Management
@@ -245,7 +235,6 @@ function onSettingChange(event) {
     const id = event.target.id;
     const settings = extension_settings[extensionName];
     
-    // Clear cache on setting change to force re-fetch with new settings
     cachedContext = null;
     lastProcessedQuery = null;
     
@@ -358,8 +347,6 @@ jQuery(async () => {
         // Test Button
         $("#ragflow_test_btn").on("click", async function(e) {
             e.preventDefault();
-            
-            // Helper to get last user message specifically for this button
             const getLastUserMessage = () => {
                 if (!chat || chat.length === 0) return "test connection check";
                 for (let i = chat.length - 1; i >= 0; i--) {
@@ -369,10 +356,8 @@ jQuery(async () => {
                 }
                 return "test connection check";
             };
-
             const query = getLastUserMessage();
             toastr.info(`Sending test query: "${query.substring(0, 20)}..."`, "RAGFlow");
-            
             const result = await fetchRagflowContext(query, { similarity_threshold: 0.01 });
             if (result) {
                 toastr.success("Connection Successful!", "RAGFlow");
@@ -384,6 +369,28 @@ jQuery(async () => {
 
         // Load Settings
         loadSettings();
+
+        // 5. Cleanup Logic: Remove injected RAG messages after generation
+        // This keeps the chat history clean from massive context dumps
+        const cleanupRagMessages = () => {
+            if (!chat || !Array.isArray(chat)) return;
+            let removedCount = 0;
+            for (let i = chat.length - 1; i >= 0; i--) {
+                if (chat[i].extra && chat[i].extra.type === 'ragflow_injection') {
+                    chat.splice(i, 1);
+                    removedCount++;
+                }
+            }
+            if (removedCount > 0) {
+                log(`🧹 Cleaned up ${removedCount} RAG injection message(s) from history.`);
+                // Trigger a UI refresh if necessary (context update handles it usually, but just in case)
+                if (eventSource) eventSource.emit(event_types.CHAT_CHANGED); 
+            }
+        };
+
+        // Listen for generation end to clean up
+        eventSource.on(event_types.GENERATION_ENDED, cleanupRagMessages);
+        eventSource.on(event_types.GENERATION_STOPPED, cleanupRagMessages);
 
         console.log("[RAGFlow] 3. Lore Injector UI & Interceptor Loaded.");
     
