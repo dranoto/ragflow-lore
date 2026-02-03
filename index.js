@@ -1,5 +1,5 @@
 // RAGFlow Lore Injector - Index.js
-// Aligned with StoryMode & SillyTavern Best Practices
+// Updated to use Prompt Interceptor for robust async injection
 
 console.log("[RAGFlow] 1. Module parsing started...");
 
@@ -9,12 +9,10 @@ import {
 
 import { 
     saveSettingsDebounced,
-    eventSource,
-    event_types,
     setExtensionPrompt,
     extension_prompt_types,
     extension_prompt_roles,
-    chat // Import chat directly to access history if needed
+    chat // Import chat for UI Test button access only
 } from '/script.js';
 
 const extensionName = "ragflow-lore";
@@ -30,14 +28,14 @@ const defaultSettings = {
     useKg: false,
     keyword: false,
     rerankId: '', 
-    timeout: 15000, // 15 seconds default timeout
+    timeout: 15000,
     injectPrefix: '\n\n<ragflow_context>\n[Relevant excerpts from the original novel for this scene:\n',
     injectSuffix: '\n]\n</ragflow_context>\n'
 };
 
-// Global State
-let loreFetchPromise = null;
-let lastFetchedQuery = ""; // Deduplication check
+// Global State for Caching
+let lastProcessedQuery = null;
+let cachedContext = null;
 
 // Helper: Timestamped Logger
 function log(msg, ...args) {
@@ -78,7 +76,6 @@ async function fetchRagflowContext(query, overrides = {}) {
     }
 
     log(`🚀 Sending Fetch Request to ${url}`);
-    log(`   Query: "${query.substring(0, 50)}..."`);
     
     const timeoutDuration = settings.timeout || 15000;
     const controller = new AbortController();
@@ -96,7 +93,7 @@ async function fetchRagflowContext(query, overrides = {}) {
             signal: controller.signal
         });
         
-        clearTimeout(timeoutId); // Clear timeout on response
+        clearTimeout(timeoutId);
 
         const duration = Date.now() - startTime;
         log(`📡 Response received in ${duration}ms. Status: ${response.status}`);
@@ -156,8 +153,6 @@ function updateInjectedPrompt(content = '') {
     
     const promptContent = content ? `${settings.injectPrefix}${content}${settings.injectSuffix}` : "";
     
-    log(`💉 Calling setExtensionPrompt (${promptContent.length} chars).`);
-    
     // Inject into the IN_CHAT depth
     setExtensionPrompt(
         extensionName, 
@@ -165,7 +160,63 @@ function updateInjectedPrompt(content = '') {
         promptContent, 
         extension_prompt_roles.SYSTEM
     );
+    
+    if (content) {
+        log(`💉 Injected context into system prompt (${promptContent.length} chars).`);
+    } else {
+        log(`🧹 Cleared injected context.`);
+    }
 }
+
+/**
+ * PROMPT INTERCEPTOR
+ * This global function is called by SillyTavern before generation.
+ * It allows us to perform async work (like fetching) and block generation until done.
+ */
+globalThis.ragflowLoreInterceptor = async function (chatHistory, contextSize, abort, type) {
+    const settings = extension_settings[extensionName];
+    
+    // 1. Safety Checks
+    if (!settings || !settings.enabled) return;
+
+    // 2. Determine Query from the provided chatHistory (more reliable than global chat)
+    // We look for the last message belonging to the user.
+    let userQuery = "";
+    
+    // Iterate backwards to find last user message
+    for (let i = chatHistory.length - 1; i >= 0; i--) {
+        if (chatHistory[i].is_user) {
+            userQuery = chatHistory[i].mes;
+            break;
+        }
+    }
+
+    if (!userQuery || userQuery.trim().length < 2) {
+        log("No valid user query found in history. Skipping.");
+        return;
+    }
+
+    // 3. Dedup / Cache Check
+    // If the query is exactly the same as the last one we processed, use cached result.
+    if (userQuery === lastProcessedQuery && cachedContext !== null) {
+        log(`♻️ Using cached context for query: "${userQuery.substring(0, 20)}..."`);
+        updateInjectedPrompt(cachedContext);
+        return;
+    }
+
+    // 4. Perform Fetch
+    log(`▶ Interceptor triggered. Fetching for: "${userQuery.substring(0, 30)}..."`);
+    toastr.info("Fetching Lore...", "RAGFlow", { timeOut: 1000 });
+    
+    const result = await fetchRagflowContext(userQuery);
+    
+    // 5. Update Cache & State
+    lastProcessedQuery = userQuery;
+    cachedContext = result;
+
+    // 6. Inject (or clear if null)
+    updateInjectedPrompt(result);
+};
 
 // 3. Settings & UI Management
 async function loadSettings() {
@@ -193,6 +244,10 @@ async function loadSettings() {
 function onSettingChange(event) {
     const id = event.target.id;
     const settings = extension_settings[extensionName];
+    
+    // Clear cache on setting change to force re-fetch with new settings
+    cachedContext = null;
+    lastProcessedQuery = null;
     
     switch (id) {
         case "ragflow_enabled": settings.enabled = !!$(event.target).prop("checked"); break;
@@ -303,9 +358,22 @@ jQuery(async () => {
         // Test Button
         $("#ragflow_test_btn").on("click", async function(e) {
             e.preventDefault();
-            toastr.info("Sending test query...", "RAGFlow");
-            log("Testing connection...");
-            const result = await fetchRagflowContext("test connection check", { similarity_threshold: 0.01 });
+            
+            // Helper to get last user message specifically for this button
+            const getLastUserMessage = () => {
+                if (!chat || chat.length === 0) return "test connection check";
+                for (let i = chat.length - 1; i >= 0; i--) {
+                    if (!chat[i].is_system && chat[i].is_user) {
+                        return chat[i].mes;
+                    }
+                }
+                return "test connection check";
+            };
+
+            const query = getLastUserMessage();
+            toastr.info(`Sending test query: "${query.substring(0, 20)}..."`, "RAGFlow");
+            
+            const result = await fetchRagflowContext(query, { similarity_threshold: 0.01 });
             if (result) {
                 toastr.success("Connection Successful!", "RAGFlow");
                 alert("RAGFlow Response:\n----------------\n" + result);
@@ -317,159 +385,7 @@ jQuery(async () => {
         // Load Settings
         loadSettings();
 
-        // --- HELPER ---
-        const getLastUserMessage = () => {
-            if (!chat || chat.length === 0) return null;
-            for (let i = chat.length - 1; i >= 0; i--) {
-                if (!chat[i].is_system && chat[i].is_user) {
-                    return chat[i].mes;
-                }
-            }
-            return null;
-        };
-
-        // --- MAIN LOGIC ---
-
-        const handleTrigger = async (eventName, eventData) => {
-            const settings = extension_settings[extensionName];
-            if (!settings?.enabled) return;
-
-            // 1. Determine Query
-            let userQuery = "";
-
-            if (eventName === 'chat_input_handling' && eventData && eventData.text) {
-                userQuery = eventData.text;
-            } 
-            else {
-                userQuery = getLastUserMessage();
-            }
-
-            if (!userQuery || userQuery.trim().length < 2) return;
-
-            // 2. Dedup Check
-            if (userQuery === lastFetchedQuery) {
-                // log(`⏭️ Skipping duplicate fetch for: "${userQuery.substring(0, 20)}..."`);
-                return;
-            }
-
-            // 3. Execute Fetch
-            log(`▶ Triggered by '${eventName}'. Fetching: "${userQuery.substring(0, 30)}..."`);
-            toastr.info("Fetching Lore...", "RAGFlow", { timeOut: 1000 });
-            
-            // Set dedup BEFORE fetch to prevent concurrent triggers
-            lastFetchedQuery = userQuery;
-            
-            loreFetchPromise = fetchRagflowContext(userQuery).then(result => {
-                log(`🏁 Fetch complete.`);
-                
-                // CRITICAL FIX: If fetch failed (null result), clear dedup so user can retry/regenerate
-                if (result === null) {
-                    log("   Fetch failed/empty. Clearing dedup to allow retry.");
-                    lastFetchedQuery = "";
-                }
-                
-                updateInjectedPrompt(result);
-                return result;
-            });
-        };
-
-        // --- BIND TRIGGERS ---
-
-        // 1. Chat Input
-        eventSource.on('chat_input_handling', (data) => handleTrigger('chat_input_handling', data));
-
-        // 2. User Message Rendered
-        eventSource.on('user_message_rendered', (id) => handleTrigger('user_message_rendered', null));
-        
-        // 3. Generation Started (With Dry Run Protection)
-        eventSource.on('generation_started', (type, buttons, dryRun) => {
-            if (dryRun) {
-                log("Skipping generation_started due to dryRun.");
-                return;
-            }
-            handleTrigger('generation_started', null);
-        });
-
-        // 4. Swipe / Regenerate
-        eventSource.on('MESSAGE_SWIPED', () => {
-             lastFetchedQuery = ""; 
-             handleTrigger('MESSAGE_SWIPED', null);
-        });
-
-        // 5. Chat Changed
-        eventSource.on('chat_id_changed', () => {
-            log(`🔔 Chat changed. Resetting state.`);
-            updateInjectedPrompt('');
-            loreFetchPromise = null;
-            
-            // Wait for chat to load into DOM/Memory before setting dedup
-            setTimeout(() => {
-                const lastMsg = getLastUserMessage();
-                if (lastMsg) {
-                    lastFetchedQuery = lastMsg;
-                    log(`   Initialized history tracker to avoid auto-fetch (Last: "${lastMsg.substring(0,20)}...")`);
-                } else {
-                    lastFetchedQuery = "";
-                }
-            }, 500); // 500ms delay to let ST load chat
-        });
-
-        // 6. PROMPT READY (Final Safety Net)
-        const promptReadyEvent = event_types && event_types.CHAT_COMPLETION_PROMPT_READY ? event_types.CHAT_COMPLETION_PROMPT_READY : 'chat_completion_prompt_ready';
-        eventSource.on(promptReadyEvent, async (data) => {
-            log("⏳ Prompt Ready check... Data keys: " + (data ? Object.keys(data).join(',') : 'NULL'));
-            
-            let contentToInject = null;
-
-            // Scenario A: Promise is pending. Wait for it.
-            if (loreFetchPromise) {
-                log("   Waiting for pending RAG fetch...");
-                try {
-                    contentToInject = await loreFetchPromise;
-                    log("   ✅ Fetch finished inside Prompt Ready.");
-                } catch (e) { console.error(e); }
-            } 
-            
-            if (contentToInject && data) {
-                const settings = extension_settings[extensionName];
-                const marker = settings.injectPrefix.trim();
-                const injection = `${settings.injectPrefix}${contentToInject}${settings.injectSuffix}`;
-                
-                let injected = false;
-
-                // Try System Prompt
-                if (data.system_prompt !== undefined) {
-                    if (!data.system_prompt.includes(marker)) {
-                        log("⚡ Manual Injection -> system_prompt");
-                        data.system_prompt += injection;
-                        injected = true;
-                    } else {
-                        log("   Context already present in system_prompt.");
-                        injected = true;
-                    }
-                } 
-                
-                // Try Story String (Fallback)
-                if (!injected && data.story_string !== undefined) {
-                    if (!data.story_string.includes(marker)) {
-                        log("⚡ Manual Injection -> story_string");
-                        data.story_string += injection;
-                        injected = true;
-                    } else {
-                        log("   Context already present in story_string.");
-                        injected = true;
-                    }
-                }
-
-                if (!injected) {
-                    log("   ❌ Could not find valid injection target (system_prompt or story_string).");
-                }
-            } else {
-                if (loreFetchPromise && !contentToInject) log("   Fetch returned null/empty.");
-            }
-        });
-
-        console.log("[RAGFlow] 3. Lore Injector Aligned & Loaded Successfully.");
+        console.log("[RAGFlow] 3. Lore Injector UI & Interceptor Loaded.");
     
     } catch (e) {
         console.error("[RAGFlow] ❌ CRITICAL INITIALIZATION ERROR:", e);
