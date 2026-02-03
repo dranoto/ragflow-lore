@@ -30,6 +30,7 @@ const defaultSettings = {
     useKg: false,
     keyword: false,
     rerankId: '', 
+    timeout: 15000, // 15 seconds default timeout
     injectPrefix: '\n\n<ragflow_context>\n[Relevant excerpts from the original novel for this scene:\n',
     injectSuffix: '\n]\n</ragflow_context>\n'
 };
@@ -79,6 +80,10 @@ async function fetchRagflowContext(query, overrides = {}) {
     log(`🚀 Sending Fetch Request to ${url}`);
     log(`   Query: "${query.substring(0, 50)}..."`);
     
+    const timeoutDuration = settings.timeout || 15000;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutDuration);
+
     try {
         const startTime = Date.now();
         const response = await fetch(url, {
@@ -87,8 +92,11 @@ async function fetchRagflowContext(query, overrides = {}) {
                 'Authorization': `Bearer ${settings.apiKey}`,
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify(payload)
+            body: JSON.stringify(payload),
+            signal: controller.signal
         });
+        
+        clearTimeout(timeoutId); // Clear timeout on response
 
         const duration = Date.now() - startTime;
         log(`📡 Response received in ${duration}ms. Status: ${response.status}`);
@@ -123,8 +131,14 @@ async function fetchRagflowContext(query, overrides = {}) {
         return chunks.join('\n...\n');
 
     } catch (error) {
-        log(`⛔ Fetch Error:`, error);
-        toastr.error(`RAGFlow Error: ${error.message}`);
+        clearTimeout(timeoutId);
+        if (error.name === 'AbortError') {
+            log(`⛔ Fetch Timed Out after ${timeoutDuration}ms`);
+            toastr.error(`RAGFlow Timeout (${timeoutDuration}ms). Server too slow?`, "Lore Injector");
+        } else {
+            log(`⛔ Fetch Error:`, error);
+            toastr.error(`RAGFlow Error: ${error.message}`);
+        }
         return null;
     }
 }
@@ -151,10 +165,6 @@ function updateInjectedPrompt(content = '') {
         promptContent, 
         extension_prompt_roles.SYSTEM
     );
-    
-    if (content) {
-        // toastr.success("Lore Context Updated", "RAGFlow");
-    }
 }
 
 // 3. Settings & UI Management
@@ -177,6 +187,7 @@ async function loadSettings() {
     $("#ragflow_useKg").prop("checked", settings.useKg);
     $("#ragflow_keyword").prop("checked", settings.keyword);
     $("#ragflow_rerankId").val(settings.rerankId);
+    $("#ragflow_timeout").val(settings.timeout);
 }
 
 function onSettingChange(event) {
@@ -193,6 +204,7 @@ function onSettingChange(event) {
         case "ragflow_useKg": settings.useKg = !!$(event.target).prop("checked"); break;
         case "ragflow_keyword": settings.keyword = !!$(event.target).prop("checked"); break;
         case "ragflow_rerankId": settings.rerankId = $(event.target).val(); break;
+        case "ragflow_timeout": settings.timeout = parseInt($(event.target).val()) || 15000; break;
     }
     saveSettingsDebounced();
 }
@@ -257,6 +269,10 @@ jQuery(async () => {
                         <label>Rerank Model ID (Optional)</label>
                         <input type="number" class="text_pole" id="ragflow_rerankId" placeholder="e.g. 1" />
                     </div>
+                    <div class="flex-container">
+                        <label>Timeout (ms)</label>
+                        <input type="number" class="text_pole" id="ragflow_timeout" placeholder="15000" />
+                    </div>
 
                     <div class="flex-container" style="margin-top:15px;">
                         <button id="ragflow_test_btn" class="menu_button">Test Connection</button>
@@ -282,6 +298,7 @@ jQuery(async () => {
         $("#ragflow_useKg").on("change", onSettingChange);
         $("#ragflow_keyword").on("change", onSettingChange);
         $("#ragflow_rerankId").on("input", onSettingChange);
+        $("#ragflow_timeout").on("input", onSettingChange);
 
         // Test Button
         $("#ragflow_test_btn").on("click", async function(e) {
@@ -339,9 +356,18 @@ jQuery(async () => {
             log(`▶ Triggered by '${eventName}'. Fetching: "${userQuery.substring(0, 30)}..."`);
             toastr.info("Fetching Lore...", "RAGFlow", { timeOut: 1000 });
             
+            // Set dedup BEFORE fetch to prevent concurrent triggers
             lastFetchedQuery = userQuery;
+            
             loreFetchPromise = fetchRagflowContext(userQuery).then(result => {
                 log(`🏁 Fetch complete.`);
+                
+                // CRITICAL FIX: If fetch failed (null result), clear dedup so user can retry/regenerate
+                if (result === null) {
+                    log("   Fetch failed/empty. Clearing dedup to allow retry.");
+                    lastFetchedQuery = "";
+                }
+                
                 updateInjectedPrompt(result);
                 return result;
             });
@@ -402,10 +428,6 @@ jQuery(async () => {
                     contentToInject = await loreFetchPromise;
                 } catch (e) { console.error(e); }
             } 
-            // Scenario B: Promise is null, but maybe we just missed the window?
-            // (Note: we don't have the result stored globally other than in prompt slot, 
-            // so we rely on setExtensionPrompt having worked. 
-            // But if we want to double check...)
             
             if (contentToInject && data && data.system_prompt !== undefined) {
                 const settings = extension_settings[extensionName];
