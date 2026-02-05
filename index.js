@@ -1,20 +1,25 @@
 // RAGFlow Lore Injector - Index.js
 // Updated: Uses chat.splice for direct injection per Interceptor docs
+// SECURITY WARNING: API keys are stored in extension settings in plain text.
+// This is not secure and is only recommended for personal/local use.
+// For production use, implement a server plugin to handle API calls securely.
 
 console.log("[RAGFlow] 1. Module parsing started...");
 
-import { 
-    extension_settings, 
-} from '/scripts/extensions.js';
-
-import { 
+// Get SillyTavern context - provides stable API access
+const { 
+    extensionSettings,
     saveSettingsDebounced,
     eventSource,
     event_types,
-    chat // Import chat for UI Test button access
-} from '/script.js';
+    chat
+} = SillyTavern.getContext();
 
-const extensionName = "ragflow-lore";
+// Get shared libraries
+const { lodash, DOMPurify } = SillyTavern.libs;
+
+// Module name constant (uppercase snake_case per schema recommendation)
+const MODULE_NAME = 'ragflow-lore';
 
 // 1. Default Settings
 const defaultSettings = {
@@ -56,7 +61,7 @@ function log(msg, ...args) {
 
 // Helper: Debug Logger
 function debugLog(stage, data) {
-    const settings = extension_settings[extensionName];
+    const settings = extensionSettings[MODULE_NAME];
     if (settings && settings.debugMode) {
         log(`[DEBUG ${stage}]`, data);
     }
@@ -83,7 +88,7 @@ function getCurrentChatId() {
 
 // Get effective mode for current chat
 function getEffectiveMode() {
-    const settings = extension_settings[extensionName];
+    const settings = extensionSettings[MODULE_NAME];
     if (!settings) return 'disabled';
     
     const chatId = getCurrentChatId();
@@ -101,7 +106,7 @@ function getEffectiveMode() {
 
 // Set mode for current chat
 function setChatMode(mode) {
-    const settings = extension_settings[extensionName];
+    const settings = extensionSettings[MODULE_NAME];
     const chatId = getCurrentChatId();
     
     if (!settings.perChatSettings) {
@@ -146,7 +151,7 @@ function updateModeIndicator() {
 
 // 2. Core Logic (RAGFlow Interaction)
 async function fetchRagflowContext(query, overrides = {}) {
-    const settings = extension_settings[extensionName];
+    const settings = extensionSettings[MODULE_NAME];
     
     // Validation
     if (!settings.apiKey || !settings.datasetId) {
@@ -154,7 +159,8 @@ async function fetchRagflowContext(query, overrides = {}) {
         return null;
     }
 
-    const cleanUrl = settings.baseUrl.replace(/\/$/, '');
+    // Sanitize URL input to prevent XSS
+    const cleanUrl = DOMPurify.sanitize(settings.baseUrl).replace(/\/$/, '');
     const url = `${cleanUrl}/api/v1/retrieval`;
 
     const threshold = overrides.similarity_threshold !== undefined 
@@ -250,7 +256,7 @@ async function fetchRagflowContext(query, overrides = {}) {
  * Supports per-chat mode configuration (disabled/auto/manual).
  */
 globalThis.ragflowLoreInterceptor = async function (chatHistory, contextSize, abort, type) {
-    const settings = extension_settings[extensionName];
+    const settings = extensionSettings[MODULE_NAME];
     
     debugLog('INTERCEPTOR_START', { chatHistoryLength: chatHistory.length, type });
     
@@ -324,7 +330,7 @@ globalThis.ragflowLoreInterceptor = async function (chatHistory, contextSize, ab
 
 // Helper function to inject context
 function injectContextIntoChat(chatHistory, contextContent, insertIndex = null) {
-    const settings = extension_settings[extensionName];
+    const settings = extensionSettings[MODULE_NAME];
     
     if (!insertIndex && insertIndex !== 0) {
         // Find insertion point
@@ -372,7 +378,7 @@ function injectContextIntoChat(chatHistory, contextContent, insertIndex = null) 
 
 // Manual trigger function
 async function manualRagTrigger() {
-    const settings = extension_settings[extensionName];
+    const settings = extensionSettings[MODULE_NAME];
     
     if (!settings || !settings.enabled) {
         toastr.error("RAGFlow extension is disabled", "Error");
@@ -422,7 +428,7 @@ async function manualRagTrigger() {
 
 // Show chunk preview dialog
 function showChunkPreview(context) {
-    const settings = extension_settings[extensionName];
+    const settings = extensionSettings[MODULE_NAME];
     
     // Create preview modal
     const modalHtml = `
@@ -480,18 +486,18 @@ function showChunkPreview(context) {
 
 // 3. Settings & UI Management
 async function loadSettings() {
-    extension_settings[extensionName] = extension_settings[extensionName] || {};
-    const settings = extension_settings[extensionName];
-    for (const key in defaultSettings) {
-        if (!settings.hasOwnProperty(key)) {
-            settings[key] = defaultSettings[key];
-        }
+    // Initialize settings if they don't exist
+    if (!extensionSettings[MODULE_NAME]) {
+        extensionSettings[MODULE_NAME] = structuredClone(defaultSettings);
     }
     
-    // Initialize perChatSettings if not exists
-    if (!settings.perChatSettings) {
-        settings.perChatSettings = {};
-    }
+    // Merge with defaults to handle new keys after updates
+    extensionSettings[MODULE_NAME] = lodash.merge(
+        structuredClone(defaultSettings),
+        extensionSettings[MODULE_NAME]
+    );
+    
+    const settings = extensionSettings[MODULE_NAME];
     
     // Update UI Elements
     $("#ragflow_enabled").prop("checked", settings.enabled);
@@ -516,16 +522,16 @@ async function loadSettings() {
 
 function onSettingChange(event) {
     const id = event.target.id;
-    const settings = extension_settings[extensionName];
+    const settings = extensionSettings[MODULE_NAME];
     
     cachedContext = null;
     lastProcessedQuery = null;
     
     switch (id) {
         case "ragflow_enabled": settings.enabled = !!$(event.target).prop("checked"); break;
-        case "ragflow_baseUrl": settings.baseUrl = $(event.target).val(); break;
+        case "ragflow_baseUrl": settings.baseUrl = DOMPurify.sanitize($(event.target).val()); break;
         case "ragflow_apiKey": settings.apiKey = $(event.target).val(); break;
-        case "ragflow_datasetId": settings.datasetId = $(event.target).val(); break;
+        case "ragflow_datasetId": settings.datasetId = DOMPurify.sanitize($(event.target).val()); break;
         case "ragflow_maxChunks": settings.maxChunks = parseInt($(event.target).val()); break;
         case "ragflow_similarity": settings.similarityThreshold = parseFloat($(event.target).val()); break;
         case "ragflow_useKg": settings.useKg = !!$(event.target).prop("checked"); break;
@@ -731,7 +737,7 @@ jQuery(async () => {
         // 5. Cleanup Logic: Remove injected RAG messages after generation
         // This keeps the chat history clean from massive context dumps
         const cleanupRagMessages = () => {
-            const settings = extension_settings[extensionName];
+            const settings = extensionSettings[MODULE_NAME];
             
             // Skip cleanup if keepInHistory is enabled
             if (settings && settings.keepInHistory) {
@@ -757,6 +763,16 @@ jQuery(async () => {
         // Listen for generation end to clean up
         eventSource.on(event_types.GENERATION_ENDED, cleanupRagMessages);
         eventSource.on(event_types.GENERATION_STOPPED, cleanupRagMessages);
+        
+        // Event listener cleanup function for proper memory management
+        function cleanup() {
+            eventSource.removeListener(event_types.GENERATION_ENDED, cleanupRagMessages);
+            eventSource.removeListener(event_types.GENERATION_STOPPED, cleanupRagMessages);
+            log("🧹 Event listeners cleaned up");
+        }
+        
+        // Expose cleanup function globally for SillyTavern to call if needed
+        globalThis.ragflowCleanup = cleanup;
         
         // 6. Initialize Chat Controls
         // Try to add chat controls to the chat interface

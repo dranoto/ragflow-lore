@@ -3,6 +3,19 @@ RAGFlow Lore Injector for SillyTavern
 
 This extension connects your SillyTavern chat to a RAGFlow Knowledge Base. It queries RAGFlow for relevant context from your books/documents and injects them into the prompt for more accurate roleplay sessions.
 
+## ⚠️ Security Notice
+
+**IMPORTANT**: This extension stores your RAGFlow API key in SillyTavern's extension settings in **plain text**. This means:
+- The API key is accessible to all other extensions
+- The API key is stored in plain text on the server
+- This is **not secure** for production or multi-user environments
+
+**Recommendations**:
+- Only use this extension in personal/local environments
+- Do not share your API key with others
+- Consider implementing a server plugin for production use (requires backend development)
+- Use a dedicated API key with restricted permissions if possible
+
 ## Features
 
 ### 🎯 Three Operation Modes

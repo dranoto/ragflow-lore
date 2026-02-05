@@ -1,11 +1,16 @@
 {
-    "name": "RAGFlow Lore Injector",
     "display_name": "RAGFlow Lore Injector",
     "loading_order": 9,
-    "version": "1.0.2",
-    "author": "angusthefuzz",
-    "description": "Queries a RAGFlow dataset for RAPTOR chunks based on user input and injects them as Lore/World Info.",
+    "requires": [],
+    "optional": [],
+    "dependencies": [],
     "js": "index.js",
     "css": "style.css",
-    "generate_interceptor": "ragflowLoreInterceptor"
+    "author": "angusthefuzz",
+    "version": "1.0.2",
+    "homePage": "https://github.com/angusthefuzz/ragflow-lore",
+    "auto_update": true,
+    "minimum_client_version": "1.0.0",
+    "generate_interceptor": "ragflowLoreInterceptor",
+    "i18n": {}
 }
