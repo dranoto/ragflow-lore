@@ -1,3 +1,5 @@
+/* RAGFlow Lore Injector Styles */
+
 .ragflow-settings-container {
     display: flex;
     flex-direction: column;
@@ -18,7 +20,8 @@
 
 .ragflow-settings-container input[type="text"],
 .ragflow-settings-container input[type="password"],
-.ragflow-settings-container input[type="number"] {
+.ragflow-settings-container input[type="number"],
+.ragflow-settings-container select {
     margin-top: 5px;
     padding: 8px;
     background-color: rgba(0, 0, 0, 0.4);
@@ -42,3 +45,157 @@
 
 .ragflow-status.success { color: #81C784; }
 .ragflow-status.error { color: #E57373; }
+
+/* Mode Indicator Styles */
+#ragflow_mode_indicator {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    transition: all 0.3s ease;
+}
+
+.ragflow-mode-disabled {
+    background-color: rgba(229, 115, 115, 0.2);
+    color: #E57373;
+    border: 1px solid #E57373;
+}
+
+.ragflow-mode-auto {
+    background-color: rgba(129, 199, 132, 0.2);
+    color: #81C784;
+    border: 1px solid #81C784;
+}
+
+.ragflow-mode-manual {
+    background-color: rgba(255, 241, 118, 0.2);
+    color: #FFF176;
+    border: 1px solid #FFF176;
+}
+
+/* Modal Styles */
+.ragflow-modal {
+    display: block;
+    position: fixed;
+    z-index: 9999;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.8);
+    overflow: auto;
+}
+
+.ragflow-modal-content {
+    background-color: var(--black30a);
+    margin: 10% auto;
+    padding: 0;
+    border: 1px solid var(--smart-theme-border);
+    border-radius: 10px;
+    width: 80%;
+    max-width: 800px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.ragflow-modal-header {
+    padding: 15px 20px;
+    border-bottom: 1px solid var(--smart-theme-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.ragflow-modal-header h3 {
+    margin: 0;
+    color: var(--smart-theme-body-color);
+}
+
+.ragflow-close-btn {
+    background: none;
+    border: none;
+    color: var(--smart-theme-body-color);
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+    padding: 0;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ragflow-close-btn:hover,
+.ragflow-close-btn:focus {
+    color: #fff;
+    outline: none;
+}
+
+.ragflow-modal-body {
+    padding: 20px;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.ragflow-preview-text {
+    background-color: rgba(0, 0, 0, 0.3);
+    padding: 15px;
+    border-radius: 5px;
+    border: 1px solid var(--smart-theme-border);
+    margin-top: 10px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 400px;
+    overflow-y: auto;
+    color: var(--smart-theme-body-color);
+    font-family: monospace;
+    font-size: 0.9em;
+    line-height: 1.5;
+}
+
+.ragflow-modal-footer {
+    padding: 15px 20px;
+    border-top: 1px solid var(--smart-theme-border);
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.ragflow-btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: all 0.2s ease;
+}
+
+.ragflow-btn-cancel {
+    background-color: rgba(229, 115, 115, 0.3);
+    color: #E57373;
+    border: 1px solid #E57373;
+}
+
+.ragflow-btn-cancel:hover {
+    background-color: rgba(229, 115, 115, 0.5);
+}
+
+.ragflow-btn-confirm {
+    background-color: rgba(129, 199, 132, 0.3);
+    color: #81C784;
+    border: 1px solid #81C784;
+}
+
+.ragflow-btn-confirm:hover {
+    background-color: rgba(129, 199, 132, 0.5);
+}
+
+/* Chat Controls */
+#ragflow_chat_controls {
+    animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
