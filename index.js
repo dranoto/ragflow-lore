@@ -546,7 +546,50 @@ function onSettingChange(event) {
     saveSettingsDebounced();
 }
 
-// 4. Initialization
+// 4. Wand Menu Registration
+/**
+ * Register the RAGFlow entry in the wand menu (extensions menu)
+ * Adds a button to manually trigger RAG context injection
+ */
+function registerWandMenuEntry() {
+    const $menu = $('#extensionsMenu');
+    if ($menu.length === 0) {
+        console.warn('[RAGFlow] Extensions menu not found');
+        return;
+    }
+
+    // Don't add if already exists
+    if ($('#ragflow_wand_button').length > 0) {
+        return;
+    }
+
+    // Create the button HTML
+    const buttonHtml = `
+        <div id="ragflow_wand_button" class="list-group-item flex-container flexGap5 interactable" title="Manually fetch and inject RAGFlow context">
+            <i class="fa-solid fa-database"></i>
+            <span>Inject Lore</span>
+        </div>
+    `;
+
+    // Add button to extensions menu
+    $menu.append(buttonHtml);
+
+    // Set up click handler
+    $('#ragflow_wand_button').on('click', async function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        // Close the extensions menu
+        $('#extensionsMenu').hide();
+        
+        // Trigger manual RAG fetch
+        await manualRagTrigger();
+    });
+
+    log('✅ Wand menu entry registered');
+}
+
+// 5. Initialization
 jQuery(async () => {
     try {
         console.log("[RAGFlow] 2. jQuery Initialization started...");
@@ -734,7 +777,10 @@ jQuery(async () => {
         // Load Settings
         loadSettings();
 
-        // 5. Cleanup Logic: Remove injected RAG messages after generation
+        // Register wand menu entry
+        registerWandMenuEntry();
+
+        // 6. Cleanup Logic: Remove injected RAG messages after generation
         // This keeps the chat history clean from massive context dumps
         const cleanupRagMessages = () => {
             const settings = extensionSettings[MODULE_NAME];
@@ -774,7 +820,7 @@ jQuery(async () => {
         // Expose cleanup function globally for SillyTavern to call if needed
         globalThis.ragflowCleanup = cleanup;
         
-        // 6. Initialize Chat Controls
+        // 7. Initialize Chat Controls
         // Try to add chat controls to the chat interface
         const initChatControls = () => {
             // Try to find a suitable place to inject the chat controls
